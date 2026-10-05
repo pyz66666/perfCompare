@@ -71,7 +71,8 @@ def test_写出对比表格_首表是套级汇总且每个测试套一个子项�
     assert hit[0][5] == "是"
 
     summary = workbook["汇总"]
-    assert [cell.value for cell in summary[1]] == [
+    # 表头是 A–E 五列；F1 上是套级口径的显著标注（见下一个测试）。
+    assert [cell.value for cell in summary[1]][:5] == [
         "测试套",
         "结果A",
         "结果B",
@@ -105,6 +106,106 @@ def test_写出对比表格_子项劣化汇总表只列被判为劣化的子项(
     assert len(rows) == 1
     assert rows[0][:3] == ["fio", "read_iops_blocksize", "blocksize-4k"]
     assert rows[0][5] == pytest.approx(-20.0, rel=1e-9)
+
+
+def _扰动(path, item, sub, factor):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        parts = line.split()
+        if parts and parts[0] == item:
+            position = parts[1:].index(sub)
+            average = lines[index + 1].split()
+            average[position + 1] = repr(float(average[position + 1]) * factor)
+            lines[index + 1] = " ".join(average)
+            break
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_写出对比表格_差距百分比保留两位小数(tmp_path):
+    """0.92 倍就是精确的 -8%，但浮点会算成 -7.999999999999999，交付物里必须写成 -8.0。"""
+    for side in ("baseline", "candidate"):
+        target = tmp_path / side / "基础性能测试"
+        target.mkdir(parents=True)
+        shutil.copy(
+            str(FIXTURE / "基础性能测试" / "stream.txt"), str(target / "stream.txt")
+        )
+    _扰动(tmp_path / "candidate" / "基础性能测试" / "stream.txt", "384_Core", "Copy", 0.92)
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    workbook = openpyxl.load_workbook(str(out_path))
+    rows = [[cell.value for cell in row] for row in workbook["stream"].iter_rows(min_row=2)]
+    hit = [row for row in rows if row[0] == "384_Core" and row[1] == "Copy"]
+    assert len(hit) == 1
+    assert hit[0][4] == -8.0
+
+
+def test_写出对比表格_汇总表的套级唯一值取子项几何平均(tmp_path):
+    """合成样例便于独立验算：套内两个子项 100 与 400，几何平均为 √(100×400)=200；
+    对比侧改成 100 与 100，几何平均为 100；故套级差距 = (100−200)/200 = −50%。
+    """
+    for side in ("baseline", "candidate"):
+        (tmp_path / side / "基础性能测试").mkdir(parents=True)
+    (tmp_path / "baseline" / "基础性能测试" / "stream.txt").write_text(
+        "1_Core a b\naverage 100.0 400.0\nvariance 0.0 0.0\n", encoding="utf-8"
+    )
+    (tmp_path / "candidate" / "基础性能测试" / "stream.txt").write_text(
+        "1_Core a b\naverage 100.0 100.0\nvariance 0.0 0.0\n", encoding="utf-8"
+    )
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    summary = openpyxl.load_workbook(str(out_path))["汇总"]
+    rows = [[cell.value for cell in row] for row in summary.iter_rows(min_row=2)]
+    stream_row = [row for row in rows if row[0] == "stream"][0]
+    # 几何平均在对数域计算（避免大数值连乘溢出），故会有极小浮点尾差，
+    # 用紧容差断言：200 = √(100×400)、100、-50% 这几个值本身是算例给的。
+    assert stream_row[1] == pytest.approx(200.0, rel=1e-12)
+    assert stream_row[2] == pytest.approx(100.0, rel=1e-12)
+    assert stream_row[3] == pytest.approx(-50.0, rel=1e-9)
+    assert stream_row[4] == "是"
+    # 算法未经需求方确认，必须在表里显著标注，不能被当成权威数字读走。
+    assert "未确认" in str(summary["F1"].value)
+
+
+def test_写出对比表格_套级几何平均不会因数值过大而溢出(tmp_path):
+    """fio 有 96 个子项、量级约 1e5，朴素连乘会溢出成 inf，而 Excel 存不下 inf（读回来是空值）。
+    算例：两个 1e300，几何平均应为 1e300。
+    """
+    for side in ("baseline", "candidate"):
+        (tmp_path / side / "基础性能测试").mkdir(parents=True)
+        (tmp_path / side / "基础性能测试" / "stream.txt").write_text(
+            "1_Core a b\naverage 1e300 1e300\nvariance 0.0 0.0\n", encoding="utf-8"
+        )
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    summary = openpyxl.load_workbook(str(out_path))["汇总"]
+    rows = list(summary.iter_rows(min_row=2, values_only=True))
+    stream_row = [row for row in rows if row[0] == "stream"][0]
+    assert stream_row[1] == pytest.approx(1e300, rel=1e-9)
+    assert stream_row[2] == pytest.approx(1e300, rel=1e-9)
 
 
 def test_写出对比表格_百分比无定义的子项显示为无法比较(tmp_path):

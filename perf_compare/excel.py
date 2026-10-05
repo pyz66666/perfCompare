@@ -17,7 +17,10 @@ SUMMARY_HEADER = ["测试套", "结果A", "结果B", "差距百分比", "是否�
 DEGRADED_HEADER = ["测试套", "测试项", "子项", "结果A", "结果B", "差距百分比"]
 DETAIL_HEADER = ["测试项", "子项", "结果A", "结果B", "差距百分比", "是否劣化"]
 
-_套级值占位 = "待确认(O1)"
+_套级口径说明 = (
+    "套级值口径：套内子项按方向归一化后的几何平均（先合并再比；0 值排除）。"
+    "【注意：套级算法未确认（O1），属临时口径，勿据此下结论】"
+)
 
 
 def write_excel(comparison, path):
@@ -30,8 +33,17 @@ def write_excel(comparison, path):
     summary = workbook.active
     summary.title = SUMMARY_SHEET
     summary.append(SUMMARY_HEADER)
-    for suite in suites:
-        summary.append([suite] + [_套级值占位] * 4)
+    for suite_row in comparison.suite_rows():
+        summary.append(
+            [
+                suite_row.suite,
+                _数值(suite_row.baseline),
+                _数值(suite_row.candidate),
+                _格式百分比(suite_row.pct),
+                "是" if suite_row.degraded else "否",
+            ]
+        )
+    summary.cell(row=1, column=6, value=_套级口径说明)
 
     degraded_sheet = workbook.create_sheet(title=DEGRADED_SHEET)
     degraded_sheet.append(DEGRADED_HEADER)
@@ -70,8 +82,17 @@ def write_excel(comparison, path):
 
 
 def _格式百分比(pct):
-    """百分比无定义（基线为 0）时显式写出「无法比较」，避免留空白被误读成漏数据。"""
-    return "无法比较" if pct is None else pct
+    """百分比按 2 位小数写出。
+
+    浮点误差会产出 -7.999999999999999 这种数字，放进交付物里很难看。
+    基线为 0 时百分比无定义，显式写「无法比较」，避免留空白被误读成漏数据。
+    """
+    return "无法比较" if pct is None else round(pct, 2)
+
+
+def _数值(value):
+    """套级值缺失（例如套内没有任何正数可用）时显式说明，不留空白。"""
+    return "无法计算" if value is None else value
 
 
 def _suites_in_order(rows):
