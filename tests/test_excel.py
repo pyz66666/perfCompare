@@ -2,6 +2,11 @@
 
 测试只穿过约定的 seam：`perf_compare.excel.write_excel`；
 读取产出文件用 openpyxl，因为 xlsx 本身就是对外契约。
+
+工作簿布局（需求方 2026-10-05 修正）：
+- 「汇总」       —— 套级唯一值的对比（不是劣化项计数）
+- 「子项劣化汇总」 —— 跨套列出被判定劣化的子项
+- 每个测试套一个 sheet —— 该套全部子项的明细
 """
 import shutil
 from pathlib import Path
@@ -39,7 +44,7 @@ def _劣化比对(tmp_path):
     )
 
 
-def test_写出对比表格_首表是汇总且每个测试套一个子项明细表(tmp_path):
+def test_写出对比表格_首表是套级汇总且每个测试套一个子项明细表(tmp_path):
     comparison = _劣化比对(tmp_path)
     out_path = tmp_path / "对比表格.xlsx"
 
@@ -66,12 +71,40 @@ def test_写出对比表格_首表是汇总且每个测试套一个子项明细�
     assert hit[0][5] == "是"
 
     summary = workbook["汇总"]
-    assert [cell.value for cell in summary[1]] == ["测试套", "劣化项数", "总项数"]
+    assert [cell.value for cell in summary[1]] == [
+        "测试套",
+        "结果A",
+        "结果B",
+        "差距百分比",
+        "是否劣化",
+    ]
     summary_rows = [[cell.value for cell in row] for row in summary.iter_rows(min_row=2)]
-    fio_row = [row for row in summary_rows if row[0] == "fio"]
-    assert len(fio_row) == 1
-    assert fio_row[0][1] == 1
-    assert fio_row[0][2] == len(detail_rows)
+    # 每个测试套恰好一行套级结果
+    assert [row[0] for row in summary_rows] == ["fio"]
+
+
+def test_写出对比表格_子项劣化汇总表只列被判为劣化的子项(tmp_path):
+    comparison = _劣化比对(tmp_path)
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    workbook = openpyxl.load_workbook(str(out_path))
+    assert "子项劣化汇总" in workbook.sheetnames
+
+    sheet = workbook["子项劣化汇总"]
+    assert [cell.value for cell in sheet[1]] == [
+        "测试套",
+        "测试项",
+        "子项",
+        "结果A",
+        "结果B",
+        "差距百分比",
+    ]
+    rows = [[cell.value for cell in row] for row in sheet.iter_rows(min_row=2)]
+    assert len(rows) == 1
+    assert rows[0][:3] == ["fio", "read_iops_blocksize", "blocksize-4k"]
+    assert rows[0][5] == pytest.approx(-20.0, rel=1e-9)
 
 
 def test_写出对比表格_百分比无定义的子项显示为无法比较(tmp_path):
