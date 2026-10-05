@@ -7,9 +7,16 @@
 """
 import os
 
-# 测试套 → (子目录, 文件名)。首版只接长表族的 fio，其余套在后续任务里逐个加入。
+# 测试套 → (子目录, 文件名)。当前接入长表族的六个基础套；其余套
+# （SPEC CPU2017 CSV、场景化 JSON / 分组文本 / 日志正则 / 裸数字列）在后续任务里逐个加入。
+# 注意 unixbench 的文件名带一个前导空格 —— 这是上游产物的真实情况，不要"顺手修掉"。
 _SUITE_FILES = {
+    "stream": ("基础性能测试", "stream.txt"),
     "fio": ("基础性能测试", "fio.txt"),
+    "iozone3": ("基础性能测试", "iozone3.txt"),
+    "lmbench3": ("基础性能测试", "lmbench3.txt"),
+    "netperf": ("基础性能测试", "netperf.txt"),
+    "unixbench": ("基础性能测试", " unixbench-master.txt"),
 }
 
 

@@ -72,3 +72,19 @@ def test_对比值下调百分之二十而阈值是五_该子项被判为劣化�
     )
     # 期望值来自这个算例本身：下调 20%，故差异百分比为 -20%。
     assert degraded[0].pct == pytest.approx(-20.0, rel=1e-9)
+
+
+def test_基线值为零_无法计算百分比且不判为劣化(tmp_path):
+    """真实数据里 lmbench3 的 Local_latencies @ RPC/UDP 基线平均值就是 0.0，百分比无定义。"""
+    base_dir = tmp_path / "基础性能测试"
+    base_dir.mkdir()
+    shutil.copy(str(FIXTURE / "基础性能测试" / "lmbench3.txt"), str(base_dir / "lmbench3.txt"))
+    results = load(str(tmp_path))
+
+    assert results.value("lmbench3", "Local_latencies", "RPC/UDP") == 0.0
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    row = [item for item in comparison.rows() if item.sub_item == "RPC/UDP"][0]
+    assert row.pct is None
+    assert row.degraded is False

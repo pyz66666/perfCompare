@@ -23,3 +23,39 @@ def test_加载结果目录_解析长表格式的测试项与子项(tmp_path):
     results = load(str(tmp_path))
 
     assert results.value("fio", "read_iops_blocksize", "blocksize-4k") == 633106.3426
+
+
+# 长表族的全部基础套文件。注意 unixbench 的文件名带一个前导空格。
+长表族文件 = [
+    "stream.txt",
+    "netperf.txt",
+    "iozone3.txt",
+    "lmbench3.txt",
+    "fio.txt",
+    " unixbench-master.txt",
+]
+
+
+def test_加载结果目录_覆盖长表族的六个基础测试套(tmp_path):
+    base_dir = tmp_path / "基础性能测试"
+    base_dir.mkdir()
+    for name in 长表族文件:
+        shutil.copy(str(FIXTURE / "基础性能测试" / name), str(base_dir / name))
+
+    results = load(str(tmp_path))
+
+    assert {suite for suite, _, _, _ in results.observations()} == {
+        "stream",
+        "netperf",
+        "iozone3",
+        "lmbench3",
+        "fio",
+        "unixbench",
+    }
+    # 断言 unixbench 能解析，钉住带前导空格文件名这个坑。
+    assert (
+        results.value(
+            "unixbench", "Index_Values_1core", "Dhrystone_2_using_register_variables"
+        )
+        == 4634.3343
+    )

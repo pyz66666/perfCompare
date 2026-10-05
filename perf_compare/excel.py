@@ -36,12 +36,17 @@ def write_excel(comparison, path):
                     row.sub_item,
                     row.baseline,
                     row.candidate,
-                    row.pct,
+                    _格式百分比(row.pct),
                     "是" if row.degraded else "否",
                 ]
             )
 
     workbook.save(path)
+
+
+def _格式百分比(pct):
+    """百分比无定义（基线为 0）时显式写出「无法比较」，避免留空白被误读成漏数据。"""
+    return "无法比较" if pct is None else pct
 
 
 def _suites_in_order(rows):

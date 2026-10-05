@@ -90,12 +90,17 @@ python3 -m perf_compare --config <配置>    # 端到端运行（最终入口）
 
 - Clarify 完成：决策 D1–D15、事实 F1–F7、非目标、阻塞项 O1–O7 均已记录。
 - 仓库骨架、`CONTEXT.md`、3 条 ADR 已落地。
-- **T1 进行中**，已完成的 RED→GREEN 切片（5 个测试全绿）：
+- **T1 进行中**，已完成的 RED→GREEN 切片（9 个测试全绿）：
   - `config.load_config` —— 读出基线、各对比与阈值
-  - `resultdir.load` —— 长表格式解析（以 fio.txt 为实例），并给出 `ResultSet.value` / `ResultSet.observations`
+  - `resultdir.load` —— 长表格式解析，并给出 `ResultSet.value` / `ResultSet.observations`
+  - `resultdir.load` 覆盖面 —— 长表族六个基础套（含带前导空格的 unixbench 文件名）
   - `compare.compare` —— 自比对零差异；下调 20% / 阈值 5% 被判为劣化
-  - `excel.write_excel` —— 首表汇总 + 每套一个明细表
-- T1 待做：`report.write_report`、`cli.main`（端到端装配）。
+  - `compare.compare` —— 基线值为 0 时百分比无定义，判为「无法比较」且不算劣化
+  - `excel.write_excel` —— 首表汇总 + 每套一个明细表；无定义的百分比显式写「无法比较」
+  - `cli.main` —— 端到端装配，一条命令产出 xlsx
+- **T2 部分完成**（长表族已铺开）。T2 剩余：无（长表族 6 个套已全部接入）。
+- T1 待做：`report.write_report`。
+- 已完成一次**真实数据端到端演示**（`out/demo/`，未入库）：3 个人为劣化被精准命中，2 个低于阈值的噪声与 1 个 +5% 改善均未被误报。
 
 ## Discoveries
 
