@@ -1,0 +1,18 @@
+Processor_Processes  null_call null_io stat open_close slct_TCP sig_inst sig_hndl fork_proc exec_proc sh_proc
+average  0.2697  0.2995  0.8132  1.8066  6.2273  0.2375  1.9173  453.8281  2171.4778  3192.7609 
+variance  0.0  0.0  2.0e-05  0.00022  10.7e-05  1.9e-05  8.7e-05  14.464636  133.072278  301.204039 
+Context_switching_ctxsw 2p/0K 2p/16K 2p/64K 8p/16K 8p/64K 16p/16K 16p/64K
+average  1.3202  1.6224  1.3822  1.6858  1.6308  1.3596  1.7076 
+variance  0.003370  0.0030  0.000170  0.00054  0.004605  0.001193  0.070719 
+Local_latencies Pipe AF_UNIX UDP  RPC/UDP TCP RPC/TCP TCP_conn
+average  5.7634  7.3256  12.9677  0.0  14.0613  0.0  29.4174 
+variance  0.002982  0.036486  0.00121  0.0  9.0e-05  0.0  0.159837 
+File_&_VM_latencies 0K_File_Create 0K_File_Delete 10K_File_Create 10K_File_Delete Mmap_Latency Prot_Fault Page_Fault 100fd_selct
+average  14.3576  20.3427  20.43  32.6246  11564.9037  0.4599  0.271  0.9516 
+variance  0.02249  0.074354  0.017779  0.165447  321.85283  6.8e-05  1e-06  1e-06 
+Local_bandwidths Pipe AF_UNIX TCP File_reread Mmap_reread Bcopy(libc) Bcopy(hand) Mem_read Mem_write
+average  6448.63  6078.9351  6575.9666  12690.7693  31917.0262  20386.6418  14602.7981  30327.1509  3496.9549 
+variance  5138.354696  6614.8011  2923.478393  382415.826636  287460.233952  36169.360706  180.205516  87.126549  578.281956 
+Memory_latencies  L1_$ L2_$ Main_mem Rand_mem
+average  1.149  2.8673  9.6038  120.1546 
+variance  0.0  1.6e-05  0.015058  0.081817  

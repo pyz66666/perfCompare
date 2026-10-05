@@ -1,0 +1,20 @@
+[
+    {
+        "install_platform": "tar",
+        "bigdata_platform": "Apache",
+        "dc_version": "Kunpeng BoostKit 25.0.0",
+        "b_version": "Kunpeng BoostKit 25.0.0.B001",
+        "version_feature": "2025 L0\u6d4b\u8bd5",
+        "performance_data": "116445015",
+        "unit": "records/min",
+        "scenario": "flink",
+        "metrics": "\u541e\u5410\u91cf",
+        "test_model": "flink",
+        "test_model_version": "flink-1.16.3",
+        "testcase_name": "flink",
+        "tool_version": "PerformanceEvaluation",
+        "topo_config": "\u5355\u673a10GE",
+        "cida_number": "Bigdata_APACHE_Single_Docker_Wordcount_001",
+        "test_case_id": "Bigdata_APACHE_Single_Docker_Wordcount_001"
+    }
+]

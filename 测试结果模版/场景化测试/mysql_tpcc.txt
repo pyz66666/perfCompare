@@ -1,0 +1,1 @@
+09:14:56,842 [Thread-436] INFO   jTPCC : Term-00, Measured tpmC (NewOrders) = 505267.31

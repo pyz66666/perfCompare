@@ -1,0 +1,25 @@
+[
+    {
+        "source": "openEuler",
+        "tool_version": "wrk-benchmark",
+        "workload_data": [
+            {
+                "name": "http_short",
+                "performance_data": 204025.72
+            },
+            {
+                "name": "http_long",
+                "performance_data": 407737.49
+            },
+            {
+                "name": "https_short",
+                "performance_data": 43473.10
+            },
+            {
+                "name": "https_long",
+                "performance_data": 249753.18
+            }
+        ],
+        "performance_data": 234564.88
+    }
+]

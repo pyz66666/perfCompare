@@ -1,0 +1,4 @@
+set docker1 docker2 docker3 docker4 avg geom
+average 145074.29 192284.73 114737.45 101085.90 93612.52 93599.63
+get docker1 docker2 docker3 docker4 avg geom
+average 128894.82 155711.54 113544.12 74140.25 121054.94 130575.69
