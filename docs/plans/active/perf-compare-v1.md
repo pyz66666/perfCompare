@@ -88,9 +88,14 @@ python3 -m perf_compare --config <配置>    # 端到端运行（最终入口）
 
 ## Progress
 
-- Clarify 完成：决策 D1–D15、事实 F1–F7、非目标、阻塞项 O1–O5 均已记录。
+- Clarify 完成：决策 D1–D15、事实 F1–F7、非目标、阻塞项 O1–O7 均已记录。
 - 仓库骨架、`CONTEXT.md`、3 条 ADR 已落地。
-- 尚未写任何实现代码。
+- **T1 进行中**，已完成的 RED→GREEN 切片（5 个测试全绿）：
+  - `config.load_config` —— 读出基线、各对比与阈值
+  - `resultdir.load` —— 长表格式解析（以 fio.txt 为实例），并给出 `ResultSet.value` / `ResultSet.observations`
+  - `compare.compare` —— 自比对零差异；下调 20% / 阈值 5% 被判为劣化
+  - `excel.write_excel` —— 首表汇总 + 每套一个明细表
+- T1 待做：`report.write_report`、`cli.main`（端到端装配）。
 
 ## Discoveries
 
@@ -98,11 +103,8 @@ python3 -m perf_compare --config <配置>    # 端到端运行（最终入口）
 - `spark_docker.out*` 末行无换行符，`wc -l` 会少计一行；解析不能依赖行数。
 - 文件名 ` unixbench-master.txt` 带前导空格。
 - 样例数据的 `performance_data` 类型不一致（F7），解析层必须先归一化再比对，否则会退化成字符串比较。
+- **TDD 执行失误（已纠正）**：`compare` 的第一个切片只要求「零差异、无劣化」，但我当时顺手实现了阈值比较逻辑，属于预判未来测试的投机代码。第二个切片因此未经 RED 就直接通过。补救方式是暂时移除阈值逻辑验证该测试确实会失败（`assert 0 == 1`），再恢复实现。后续每个切片都必须先确认 RED。
 
 ## Unresolved
 
-- O1 套级汇总算法（阻塞 sheet1 汇总列）
-- O2 Excel 手工案例（当前按 D5/D6 实现）
-- O3 报告 HTML 样式与章节
-- O4 阈值默认值与内核版本配置字段名
-- O5 劣化判定是否含等号
+见 `性能工程-数据自动对比分析报告项目规划.md` 的「待确认（阻塞项）」表（O1–O7）—— 该表是唯一权威版本，本计划不再重复罗列。
