@@ -14,8 +14,8 @@ import openpyxl
 SUMMARY_SHEET = "汇总"
 DEGRADED_SHEET = "子项劣化汇总"
 SUMMARY_HEADER = ["测试套", "结果A", "结果B", "差距百分比", "是否劣化"]
-DEGRADED_HEADER = ["测试套", "测试项", "子项", "结果A", "结果B", "差距百分比"]
-DETAIL_HEADER = ["测试项", "子项", "结果A", "结果B", "差距百分比", "是否劣化"]
+DEGRADED_HEADER = ["测试套", "测试子项", "结果A", "结果B", "差距百分比"]
+DETAIL_HEADER = ["测试子项", "结果A", "结果B", "差距百分比", "是否劣化"]
 
 _套级口径说明 = (
     "套级值口径：套内子项按方向归一化后的几何平均（先合并再比；0 值排除）。"
@@ -53,8 +53,7 @@ def write_excel(comparison, path):
         degraded_sheet.append(
             [
                 row.suite,
-                row.item,
-                row.sub_item,
+                _标签(row),
                 row.baseline,
                 row.candidate,
                 _格式百分比(row.pct),
@@ -69,8 +68,7 @@ def write_excel(comparison, path):
                 continue
             detail.append(
                 [
-                    row.item,
-                    row.sub_item,
+                    _标签(row),
                     _测量值(row.baseline),
                     _测量值(row.candidate),
                     _格式百分比(row.pct),
@@ -88,6 +86,16 @@ def _格式百分比(pct):
     基线为 0 时百分比无定义，显式写「无法比较」，避免留空白被误读成漏数据。
     """
     return "无法比较" if pct is None else round(pct, 2)
+
+
+def _标签(row):
+    """测试项与子项合并成一列，用 `-` 连接（需求方 2026-10-05）。
+
+    例：`randread_bw_blocksize` + `blocksize-1024k` → `randread_bw_blocksize-blocksize-1024k`。
+    """
+    if not row.sub_item:
+        return row.item
+    return "{0}-{1}".format(row.item, row.sub_item)
 
 
 def _测量值(value):
