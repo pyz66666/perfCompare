@@ -74,6 +74,38 @@ def test_对比值下调百分之二十而阈值是五_该子项被判为劣化�
     assert degraded[0].pct == pytest.approx(-20.0, rel=1e-9)
 
 
+def test_两版本测试项名不一致_列为单边缺失而不崩溃(tmp_path):
+    """核数不同会让测试项名对不上（384_Core vs 256_Core）。不能崩溃，
+    且两边各自独有的测试项都要被列出来，不能被静默忽略。"""
+    for side, item in (("baseline", "384_Core"), ("candidate", "256_Core")):
+        target = tmp_path / side / "基础性能测试"
+        target.mkdir(parents=True)
+        (target / "stream.txt").write_text(
+            "{0} Copy\naverage 100.0\nvariance 0.0\n".format(item), encoding="utf-8"
+        )
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+
+    by_item = {row.item: row for row in comparison.rows()}
+    assert set(by_item) == {"384_Core", "256_Core"}
+
+    baseline_only = by_item["384_Core"]
+    assert baseline_only.baseline == 100.0
+    assert baseline_only.candidate is None
+    assert baseline_only.pct is None
+    assert baseline_only.degraded is False
+
+    candidate_only = by_item["256_Core"]
+    assert candidate_only.baseline is None
+    assert candidate_only.candidate == 100.0
+    assert candidate_only.pct is None
+    assert candidate_only.degraded is False
+
+
 def test_基线值为零_无法计算百分比且不判为劣化(tmp_path):
     """真实数据里 lmbench3 的 Local_latencies @ RPC/UDP 基线平均值就是 0.0，百分比无定义。"""
     base_dir = tmp_path / "基础性能测试"

@@ -71,8 +71,8 @@ def write_excel(comparison, path):
                 [
                     row.item,
                     row.sub_item,
-                    row.baseline,
-                    row.candidate,
+                    _测量值(row.baseline),
+                    _测量值(row.candidate),
                     _格式百分比(row.pct),
                     "是" if row.degraded else "否",
                 ]
@@ -88,6 +88,11 @@ def _格式百分比(pct):
     基线为 0 时百分比无定义，显式写「无法比较」，避免留空白被误读成漏数据。
     """
     return "无法比较" if pct is None else round(pct, 2)
+
+
+def _测量值(value):
+    """单边缺失（某侧没有这个测量项，例如两侧核数不同）时显式写「缺失」，不留空白。"""
+    return "缺失" if value is None else value
 
 
 def _数值(value):

@@ -208,6 +208,35 @@ def test_写出对比表格_套级几何平均不会因数值过大而溢出(tmp
     assert stream_row[2] == pytest.approx(1e300, rel=1e-9)
 
 
+def test_写出对比表格_单边缺失的测量项显式标注而不是留空白(tmp_path):
+    """核数不同会让项名对不上（384_Core vs 256_Core），缺失的一侧要写明「缺失」。"""
+    for side, item in (("baseline", "384_Core"), ("candidate", "256_Core")):
+        target = tmp_path / side / "基础性能测试"
+        target.mkdir(parents=True)
+        (target / "stream.txt").write_text(
+            "{0} Copy\naverage 100.0\nvariance 0.0\n".format(item), encoding="utf-8"
+        )
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    rows = [
+        [cell.value for cell in row]
+        for row in openpyxl.load_workbook(str(out_path))["stream"].iter_rows(min_row=2)
+    ]
+    by_item = {row[0]: row for row in rows}
+    assert by_item["384_Core"][2] == 100.0
+    assert by_item["384_Core"][3] == "缺失"
+    assert by_item["256_Core"][2] == "缺失"
+    assert by_item["256_Core"][3] == 100.0
+
+
 def test_写出对比表格_百分比无定义的子项显示为无法比较(tmp_path):
     """基线为 0 时留空白会被误读成漏数据，所以显式写出「无法比较」。"""
     for side in ("baseline", "candidate"):

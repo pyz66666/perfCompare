@@ -17,8 +17,8 @@ class Row:
     suite: str
     item: str
     sub_item: str
-    baseline: float
-    candidate: float
+    baseline: Optional[float]
+    candidate: Optional[float]
     pct: Optional[float]
     degraded: bool
 
@@ -51,12 +51,31 @@ class Comparison:
 
 
 def compare(baseline, candidate, threshold_pct):
-    """比对基线与对比结果集，返回 Comparison。"""
+    """比对基线与对比结果集，返回 Comparison。
+
+    配对按两侧测量值的**并集**进行：测试项名编码了核数（如 `384_Core`），两侧核数不同时
+    项名对不上，此时各自独有的项列为「单边缺失」（值为 None），既不崩溃也不被静默忽略。
+    """
+    base_map = {
+        (suite, item, sub_item): value
+        for suite, item, sub_item, value in baseline.observations()
+    }
+    cand_map = {
+        (suite, item, sub_item): value
+        for suite, item, sub_item, value in candidate.observations()
+    }
+
     rows = []
-    for suite, item, sub_item, base_value in baseline.observations():
-        cand_value = candidate.value(suite, item, sub_item)
-        # 基线为 0 时百分比无定义：真实数据里 lmbench3 的 RPC/UDP、RPC/TCP 就是 0.0。
-        pct = None if base_value == 0 else (cand_value - base_value) / base_value * 100.0
+    for key in sorted(set(base_map) | set(cand_map)):
+        suite, item, sub_item = key
+        base_value = base_map.get(key)
+        cand_value = cand_map.get(key)
+        if base_value is None or cand_value is None or base_value == 0:
+            # 单边缺失，或基线为 0（真实数据里 lmbench3 的 RPC/UDP、RPC/TCP 就是 0.0）：
+            # 百分比无定义。
+            pct = None
+        else:
+            pct = (cand_value - base_value) / base_value * 100.0
         rows.append(
             Row(
                 suite=suite,
@@ -95,9 +114,9 @@ def _higher_is_better(item):
 def _normalized(value, higher_is_better):
     """把测量值换算成「越大越好」的口径，供几何平均使用。
 
-    几何平均要求正数，因此 0 值（以及越低越好的 0 值）一律排除。
+    几何平均要求正数；单边缺失（None）与 0 值一律排除，不参与套级归并。
     """
-    if value <= 0:
+    if value is None or value <= 0:
         return None
     return value if higher_is_better else 1.0 / value
 
