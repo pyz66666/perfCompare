@@ -63,6 +63,22 @@ def _明细行(workbook, sheet):
     ]
 
 
+def test_写出对比表格_汇总表用分组标签作为行名(tmp_path):
+    """unixbench 在汇总里占单核／多核两行，行名必须能区分，不能都叫 unixbench。"""
+    comparison = compare(load(str(FIXTURE)), load(str(FIXTURE)), threshold_pct=5.0)
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    labels = [
+        [cell.value for cell in row][0]
+        for row in openpyxl.load_workbook(str(out_path))["汇总"].iter_rows(min_row=2)
+    ]
+    assert "unixbench（单核）" in labels
+    assert "unixbench（多核）" in labels
+    assert "unixbench" not in labels
+
+
 def test_写出对比表格_明细表把测试项与子项合并成一列(tmp_path):
     _两侧样例(tmp_path)
 

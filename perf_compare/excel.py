@@ -36,7 +36,7 @@ def write_excel(comparison, path):
     for suite_row in comparison.suite_rows():
         summary.append(
             [
-                suite_row.suite,
+                suite_row.label,
                 _数值(suite_row.baseline),
                 _数值(suite_row.candidate),
                 _格式百分比(suite_row.pct),

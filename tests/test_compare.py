@@ -74,6 +74,27 @@ def test_对比值下调百分之二十而阈值是五_该子项被判为劣化�
     assert degraded[0].pct == pytest.approx(-20.0, rel=1e-9)
 
 
+def test_汇总口径_unixbench直接取Index_Score并分单核多核两行(tmp_path):
+    """unixbench 的汇总值就是工具自带的 System_Benchmarks_Index_Score，不再另算几何平均；
+    且按单核/多核各出一行（需求方 2026-10-05）。期望值直接取自样例文件的对应子项。"""
+    results = load(str(FIXTURE))
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    by_label = {row.label: row for row in comparison.suite_rows()}
+    assert set(by_label) == {
+        "stream",
+        "fio",
+        "iozone3",
+        "lmbench3",
+        "netperf",
+        "unixbench（单核）",
+        "unixbench（多核）",
+    }
+    assert by_label["unixbench（单核）"].baseline == 1082.19
+    assert by_label["unixbench（多核）"].baseline == 23032.61
+
+
 def test_两版本测试项名不一致_列为单边缺失而不崩溃(tmp_path):
     """核数不同会让测试项名对不上（384_Core vs 256_Core）。不能崩溃，
     且两边各自独有的测试项都要被列出来，不能被静默忽略。"""

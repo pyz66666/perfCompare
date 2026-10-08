@@ -25,9 +25,10 @@ class Row:
 
 @dataclass(frozen=True)
 class SuiteRow:
-    """一个测试套的套级比对面。"""
+    """一个汇总行：测试套 + 分组（如单核／多核）。"""
 
     suite: str
+    label: str
     baseline: Optional[float]
     candidate: Optional[float]
     pct: Optional[float]
@@ -105,6 +106,25 @@ def _is_degraded(pct, threshold_pct):
 _LOWER_IS_BETTER_ITEMS = ("Processor_Processes", "Context_switching_ctxsw")
 
 
+# 按测试套声明的**汇总口径**（需求方逐套确认，各套不同）：
+#   groups —— 是否按单核／多核拆成两行。核数不固定（384 只是当前样例），
+#             故按项名里是否含 "1core"（忽略大小写与分隔符）识别单核。
+#   pick   —— 若给出，则分组的唯一值直接取这个子项（测试工具自带的综合分），不再另算平均。
+# 未声明的测试套沿用临时口径。
+_SUMMARY_RECIPES = {
+    "unixbench": {"groups": True, "pick": "System_Benchmarks_Index_Score"},
+}
+
+
+def _squash(name):
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def _is_single_core(item):
+    """单核项识别：`Index_Values_1core`、`1_Core` 都归一化成含 `1core`。"""
+    return "1core" in _squash(item)
+
+
 def _higher_is_better(item):
     if "latenc" in item.lower():
         return False
@@ -134,33 +154,66 @@ def _geometric_mean(values):
 
 
 def _suite_level(rows, threshold_pct):
-    """套级唯一值 = 套内全部子项（按方向归一化后）的几何平均，先合并再比。
+    """按各测试套声明的**汇总口径**产出汇总行。
 
-    **该算法未经需求方确认（阻塞项 O1）**，属临时口径；需求方提供算法后只需改这里。
+    口径由 `_SUMMARY_RECIPES` 按套声明，因为各套不同（需求方逐套确认）。
+    未声明的套沿用临时口径：整套子项按方向归一化后取几何平均（**算法未确认，见 O1**）。
     """
     suite_rows = []
     for suite in dict.fromkeys(row.suite for row in rows):
-        base_values = []
-        cand_values = []
-        for row in rows:
-            if row.suite != suite:
-                continue
-            higher_is_better = _higher_is_better(row.item)
-            base_values.append(_normalized(row.baseline, higher_is_better))
-            cand_values.append(_normalized(row.candidate, higher_is_better))
-
-        base_value = _geometric_mean(base_values)
-        cand_value = _geometric_mean(cand_values)
-        pct = None
-        if base_value is not None and cand_value is not None and base_value != 0:
-            pct = (cand_value - base_value) / base_value * 100.0
-        suite_rows.append(
-            SuiteRow(
-                suite=suite,
-                baseline=base_value,
-                candidate=cand_value,
-                pct=pct,
-                degraded=_is_degraded(pct, threshold_pct),
-            )
-        )
+        suite_rows.extend(_suite_rows_for(suite, rows, threshold_pct))
     return suite_rows
+
+
+def _suite_rows_for(suite, rows, threshold_pct):
+    suite_all = [row for row in rows if row.suite == suite]
+    recipe = _SUMMARY_RECIPES.get(suite)
+    if recipe is None:
+        return [_make_suite_row(suite, suite, suite_all, None, threshold_pct)]
+
+    groups = {}
+    for row in suite_all:
+        groups.setdefault("单核" if _is_single_core(row.item) else "多核", []).append(row)
+    return [
+        _make_suite_row(
+            suite,
+            "{0}（{1}）".format(suite, name),
+            group_rows,
+            recipe.get("pick"),
+            threshold_pct,
+        )
+        for name, group_rows in groups.items()
+    ]
+
+
+def _make_suite_row(suite, label, group_rows, pick, threshold_pct):
+    if pick is not None:
+        base_value = _pick_sub_item(group_rows, pick, "baseline")
+        cand_value = _pick_sub_item(group_rows, pick, "candidate")
+    else:
+        base_value = _geometric_mean(
+            [_normalized(row.baseline, _higher_is_better(row.item)) for row in group_rows]
+        )
+        cand_value = _geometric_mean(
+            [_normalized(row.candidate, _higher_is_better(row.item)) for row in group_rows]
+        )
+
+    pct = None
+    if base_value is not None and cand_value is not None and base_value != 0:
+        pct = (cand_value - base_value) / base_value * 100.0
+    return SuiteRow(
+        suite=suite,
+        label=label,
+        baseline=base_value,
+        candidate=cand_value,
+        pct=pct,
+        degraded=_is_degraded(pct, threshold_pct),
+    )
+
+
+def _pick_sub_item(group_rows, sub_item, side):
+    """取分组里指定子项的值；没有该子项则为 None（单边缺失或口径不适用）。"""
+    for row in group_rows:
+        if row.sub_item == sub_item:
+            return getattr(row, side)
+    return None
