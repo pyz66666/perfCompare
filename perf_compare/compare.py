@@ -107,14 +107,15 @@ _LOWER_IS_BETTER_ITEMS = ("Processor_Processes", "Context_switching_ctxsw")
 
 
 # 按测试套声明的**汇总口径**（需求方逐套确认，各套不同）：
-#   groups  —— 是否按单核／多核分组。核数不固定（384 只是当前样例），
-#              故按项名里是否含 "1core"（忽略大小写与分隔符）识别单核。
-#   combine —— 是否把各分组的唯一值再合并成**一个**汇总值（对分组值再求几何平均）。
-#   pick    —— 若给出，则分组的唯一值直接取这个子项（测试工具自带的综合分），不再另算平均。
+#   group_by —— 先按什么分组求唯一值：`core` = 单核／多核（核数不固定，故按项名是否含
+#               "1core" 识别），`item` = 每个测试项各自一组。
+#   combine  —— 是否把各分组的值再合并成**一个**汇总值（对分组值再求几何平均）。
+#   pick     —— 若给出，则分组的唯一值直接取这个子项（测试工具自带的综合分），不再另算平均。
 # 未声明的测试套沿用临时口径：整套子项归一化后取几何平均（**算法未确认，见 O1**）。
 _SUMMARY_RECIPES = {
-    "stream": {"groups": True, "combine": True},
-    "unixbench": {"groups": True, "pick": "System_Benchmarks_Index_Score"},
+    "stream": {"group_by": "core", "combine": True},
+    "fio": {"group_by": "item", "combine": True},
+    "unixbench": {"group_by": "core", "pick": "System_Benchmarks_Index_Score"},
 }
 
 
@@ -173,9 +174,7 @@ def _suite_rows_for(suite, rows, threshold_pct):
     if recipe is None:
         return [_make_suite_row(suite, suite, suite_all, None, threshold_pct)]
 
-    groups = {}
-    for row in suite_all:
-        groups.setdefault("单核" if _is_single_core(row.item) else "多核", []).append(row)
+    groups = _groups_of(recipe, suite_all)
 
     pick = recipe.get("pick")
     if recipe.get("combine"):
@@ -196,6 +195,19 @@ def _suite_rows_for(suite, rows, threshold_pct):
         )
         for name, rows_in_group in groups.items()
     ]
+
+
+def _groups_of(recipe, suite_all):
+    """按口径分组。`core` → 单核／多核；`item` → 每个测试项一组。"""
+    by_item = recipe.get("group_by") == "item"
+    groups = {}
+    for row in suite_all:
+        if by_item:
+            key = row.item
+        else:
+            key = "单核" if _is_single_core(row.item) else "多核"
+        groups.setdefault(key, []).append(row)
+    return groups
 
 
 def _group_value(group_rows, pick, side):

@@ -74,6 +74,32 @@ def test_对比值下调百分之二十而阈值是五_该子项被判为劣化�
     assert degraded[0].pct == pytest.approx(-20.0, rel=1e-9)
 
 
+def test_汇总口径_fio按每个测试项求几何平均再合并(tmp_path):
+    """fio 的汇总值 = 每个测试项内部先求几何平均，再对所有测试项的值求几何平均。
+
+    算例让两个测试项的项数不等，以区分「两步法」与「对全部子项一步求平均」：
+      A = 1,1 → 几何平均 1；B = 10000 → 几何平均 10000；
+      两步法 = √(1×10000) = 100；一步法 = (1×1×10000)^(1/3) ≈ 21.54。
+    """
+    for side in ("baseline", "candidate"):
+        (tmp_path / side / "基础性能测试").mkdir(parents=True)
+        (tmp_path / side / "基础性能测试" / "fio.txt").write_text(
+            "read_iops_blocksize a b\naverage 1.0 1.0\nvariance 0.0 0.0\n"
+            "write_iops_blocksize z\naverage 10000.0\nvariance 0.0\n",
+            encoding="utf-8",
+        )
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+
+    rows = {row.label: row for row in comparison.suite_rows()}
+    assert set(rows) == {"fio"}
+    assert rows["fio"].baseline == pytest.approx(100.0, rel=1e-9)
+
+
 def test_汇总口径_stream先按分组求几何平均再合并(tmp_path):
     """stream 的汇总值 = 单核四项的几何平均 与 多核四项的几何平均，再对两者求几何平均。
 
