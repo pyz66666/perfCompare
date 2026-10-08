@@ -74,6 +74,32 @@ def test_对比值下调百分之二十而阈值是五_该子项被判为劣化�
     assert degraded[0].pct == pytest.approx(-20.0, rel=1e-9)
 
 
+def test_汇总口径_stream先按分组求几何平均再合并(tmp_path):
+    """stream 的汇总值 = 单核四项的几何平均 与 多核四项的几何平均，再对两者求几何平均。
+
+    算例刻意让两组项数不等，以便区分「两步法」与「对全部子项一步求平均」：
+      单核 1,1,1 → 几何平均 1；多核 10000 → 几何平均 10000；
+      两步法 = √(1×10000) = 100；若一步法对全部 4 项求平均则为 10。
+    """
+    for side in ("baseline", "candidate"):
+        (tmp_path / side / "基础性能测试").mkdir(parents=True)
+        (tmp_path / side / "基础性能测试" / "stream.txt").write_text(
+            "1_Core a b c\naverage 1.0 1.0 1.0\nvariance 0.0 0.0 0.0\n"
+            "384_Core z\naverage 10000.0\nvariance 0.0\n",
+            encoding="utf-8",
+        )
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+
+    rows = {row.label: row for row in comparison.suite_rows()}
+    assert set(rows) == {"stream"}
+    assert rows["stream"].baseline == pytest.approx(100.0, rel=1e-9)
+
+
 def test_汇总口径_unixbench直接取Index_Score并分单核多核两行(tmp_path):
     """unixbench 的汇总值就是工具自带的 System_Benchmarks_Index_Score，不再另算几何平均；
     且按单核/多核各出一行（需求方 2026-10-05）。期望值直接取自样例文件的对应子项。"""

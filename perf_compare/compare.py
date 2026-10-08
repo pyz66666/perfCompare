@@ -107,11 +107,13 @@ _LOWER_IS_BETTER_ITEMS = ("Processor_Processes", "Context_switching_ctxsw")
 
 
 # 按测试套声明的**汇总口径**（需求方逐套确认，各套不同）：
-#   groups —— 是否按单核／多核拆成两行。核数不固定（384 只是当前样例），
-#             故按项名里是否含 "1core"（忽略大小写与分隔符）识别单核。
-#   pick   —— 若给出，则分组的唯一值直接取这个子项（测试工具自带的综合分），不再另算平均。
-# 未声明的测试套沿用临时口径。
+#   groups  —— 是否按单核／多核分组。核数不固定（384 只是当前样例），
+#              故按项名里是否含 "1core"（忽略大小写与分隔符）识别单核。
+#   combine —— 是否把各分组的唯一值再合并成**一个**汇总值（对分组值再求几何平均）。
+#   pick    —— 若给出，则分组的唯一值直接取这个子项（测试工具自带的综合分），不再另算平均。
+# 未声明的测试套沿用临时口径：整套子项归一化后取几何平均（**算法未确认，见 O1**）。
 _SUMMARY_RECIPES = {
+    "stream": {"groups": True, "combine": True},
     "unixbench": {"groups": True, "pick": "System_Benchmarks_Index_Score"},
 }
 
@@ -174,30 +176,48 @@ def _suite_rows_for(suite, rows, threshold_pct):
     groups = {}
     for row in suite_all:
         groups.setdefault("单核" if _is_single_core(row.item) else "多核", []).append(row)
+
+    pick = recipe.get("pick")
+    if recipe.get("combine"):
+        group_rows = list(groups.values())
+        return [
+            _row_from_values(
+                suite,
+                suite,
+                _geometric_mean([_group_value(g, pick, "baseline") for g in group_rows]),
+                _geometric_mean([_group_value(g, pick, "candidate") for g in group_rows]),
+                threshold_pct,
+            )
+        ]
+
     return [
         _make_suite_row(
-            suite,
-            "{0}（{1}）".format(suite, name),
-            group_rows,
-            recipe.get("pick"),
-            threshold_pct,
+            suite, "{0}（{1}）".format(suite, name), rows_in_group, pick, threshold_pct
         )
-        for name, group_rows in groups.items()
+        for name, rows_in_group in groups.items()
     ]
 
 
-def _make_suite_row(suite, label, group_rows, pick, threshold_pct):
+def _group_value(group_rows, pick, side):
+    """一个分组的唯一值：取指定子项，或对该分组的子项按方向归一化后求几何平均。"""
     if pick is not None:
-        base_value = _pick_sub_item(group_rows, pick, "baseline")
-        cand_value = _pick_sub_item(group_rows, pick, "candidate")
-    else:
-        base_value = _geometric_mean(
-            [_normalized(row.baseline, _higher_is_better(row.item)) for row in group_rows]
-        )
-        cand_value = _geometric_mean(
-            [_normalized(row.candidate, _higher_is_better(row.item)) for row in group_rows]
-        )
+        return _pick_sub_item(group_rows, pick, side)
+    return _geometric_mean(
+        [_normalized(getattr(row, side), _higher_is_better(row.item)) for row in group_rows]
+    )
 
+
+def _make_suite_row(suite, label, group_rows, pick, threshold_pct):
+    return _row_from_values(
+        suite,
+        label,
+        _group_value(group_rows, pick, "baseline"),
+        _group_value(group_rows, pick, "candidate"),
+        threshold_pct,
+    )
+
+
+def _row_from_values(suite, label, base_value, cand_value, threshold_pct):
     pct = None
     if base_value is not None and cand_value is not None and base_value != 0:
         pct = (cand_value - base_value) / base_value * 100.0
