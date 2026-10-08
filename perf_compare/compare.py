@@ -115,6 +115,8 @@ _LOWER_IS_BETTER_ITEMS = ("Processor_Processes", "Context_switching_ctxsw")
 _SUMMARY_RECIPES = {
     "stream": {"group_by": "core", "combine": True},
     "fio": {"group_by": "item", "combine": True},
+    "iozone3": {"group_by": "item", "combine": True},
+    "netperf": {"group_by": "item", "combine": True},
     "unixbench": {"group_by": "core", "pick": "System_Benchmarks_Index_Score"},
 }
 
