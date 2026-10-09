@@ -88,19 +88,18 @@ python3 -m perf_compare --config <配置>    # 端到端运行（最终入口）
 
 ## Progress
 
-- Clarify 完成：决策 D1–D15、事实 F1–F7、非目标、阻塞项 O1–O7 均已记录。
-- 仓库骨架、`CONTEXT.md`、3 条 ADR 已落地。
-- **T1 进行中**，已完成的 RED→GREEN 切片（9 个测试全绿）：
-  - `config.load_config` —— 读出基线、各对比与阈值
-  - `resultdir.load` —— 长表格式解析，并给出 `ResultSet.value` / `ResultSet.observations`
-  - `resultdir.load` 覆盖面 —— 长表族六个基础套（含带前导空格的 unixbench 文件名）
-  - `compare.compare` —— 自比对零差异；下调 20% / 阈值 5% 被判为劣化
-  - `compare.compare` —— 基线值为 0 时百分比无定义，判为「无法比较」且不算劣化
-  - `excel.write_excel` —— 首表汇总 + 每套一个明细表；无定义的百分比显式写「无法比较」
-  - `cli.main` —— 端到端装配，一条命令产出 xlsx
-- **T2 部分完成**（长表族已铺开）。T2 剩余：无（长表族 6 个套已全部接入）。
-- T1 待做：`report.write_report`。
-- 已完成一次**真实数据端到端演示**（`out/demo/`，未入库）：3 个人为劣化被精准命中，2 个低于阈值的噪声与 1 个 +5% 改善均未被误报。
+- Clarify 完成：决策 D1–D18、事实 F1–F12、非目标、阻塞项 O1–O9 均已记录。
+- **逐套确认汇总口径**（需求方口述、我算参考值核对、确认后实现）：已完成 13/14 套的口径确认。
+  - 已实现：`stream`、`fio`、`iozone3`、`netperf`、`unixbench`
+  - 口径已确认待实现：`lmbench3`（两行：时延/带宽）、`speccpu2017`（四行）、`nginx`（五行）、`mysql_tpcc`（一行）
+  - 口径未确认且未接入解析：`flink_nexmark`、`flink_wordcount`、`flink_6000c`、`mysql_sysbench`、`redis_docker`
+- **F11 方向缺陷已修复**：时延类指标变大现在会被判为劣化（原先一律按"越小越差"，会漏报）。
+- 已完成的 RED→GREEN 切片（21 个测试全绿）：`config.load_config`、`resultdir.load`（长表族六套）、
+  `compare.compare`（配对/劣化/方向/单边缺失/零基线）、`compare` 汇总口径（按套声明，三种形态）、
+  `excel.write_excel`（三张表 + 合并标签 + 精度 + 缺失/无法比较标注）、`cli.main`。
+- 已完成一次**真实数据端到端演示**（`out/demo/`，未入库）。
+- **待做**：`report.write_report`（HTML 报告 + LLM 提示词）、`kernel.resolve`（commitId）、
+  speccpu2017 CSV 解析、场景化 7 套解析、多对比（O8）。
 
 ## Discoveries
 

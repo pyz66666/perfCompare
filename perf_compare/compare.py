@@ -85,20 +85,26 @@ def compare(baseline, candidate, threshold_pct):
                 baseline=base_value,
                 candidate=cand_value,
                 pct=pct,
-                degraded=_is_degraded(pct, threshold_pct),
+                degraded=_is_degraded(pct, threshold_pct, _higher_is_better(item)),
             )
         )
     return Comparison(rows, _suite_level(rows, threshold_pct))
 
 
-def _is_degraded(pct, threshold_pct):
-    """劣化 = 朝变差的方向变化，且幅度严格大于阈值（决策记录 D15）。
+def _is_degraded(pct, threshold_pct, higher_is_better=True):
+    """劣化 = 朝**变差**的方向变化，且幅度严格大于阈值（决策记录 D15）。
 
-    百分比无定义（基线为 0）时无从判定，一律不算劣化。
+    - 越大越好的指标（带宽、IOPS、吞吐）：**变小**才是劣化。
+    - 越小越好的指标（时延、耗时）：**变大**才是劣化。
+
+    方向若一律按「越大越好」处理，时延上升会被判成没劣化 —— 会漏报，比崩溃更危险。
+    百分比无定义（基线为 0、单边缺失）时无从判定，一律不算劣化。
     """
     if pct is None:
         return False
-    return -pct > threshold_pct
+    if higher_is_better:
+        return -pct > threshold_pct
+    return pct > threshold_pct
 
 
 # 「越小越好」的测试项。这是一个**临时口径**：完整的方向表与配置覆盖属于 T6，
@@ -231,7 +237,7 @@ def _make_suite_row(suite, label, group_rows, pick, threshold_pct):
     )
 
 
-def _row_from_values(suite, label, base_value, cand_value, threshold_pct):
+def _row_from_values(suite, label, base_value, cand_value, threshold_pct, higher_is_better=True):
     pct = None
     if base_value is not None and cand_value is not None and base_value != 0:
         pct = (cand_value - base_value) / base_value * 100.0
@@ -241,7 +247,7 @@ def _row_from_values(suite, label, base_value, cand_value, threshold_pct):
         baseline=base_value,
         candidate=cand_value,
         pct=pct,
-        degraded=_is_degraded(pct, threshold_pct),
+        degraded=_is_degraded(pct, threshold_pct, higher_is_better),
     )
 
 

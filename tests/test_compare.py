@@ -179,6 +179,40 @@ def test_两版本测试项名不一致_列为单边缺失而不崩溃(tmp_path)
     assert candidate_only.degraded is False
 
 
+def test_时延类指标变大_应判为劣化(tmp_path):
+    """时延是「越小越好」：**变大**才是劣化。
+
+    方向若一律按「越大越好」处理，时延上升会被判成没劣化 —— 这是会漏报的静默错误。
+    此处把 lmbench3 的 Memory_latencies @ Main_mem 上调 20%（阈值 5%）。
+    """
+    for side in ("baseline", "candidate"):
+        target = tmp_path / side / "基础性能测试"
+        target.mkdir(parents=True)
+        shutil.copy(str(FIXTURE / "基础性能测试" / "lmbench3.txt"), str(target / "lmbench3.txt"))
+
+    path = tmp_path / "candidate" / "基础性能测试" / "lmbench3.txt"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        parts = line.split()
+        if parts and parts[0] == "Memory_latencies":
+            position = parts[1:].index("Main_mem")
+            average = lines[index + 1].split()
+            average[position + 1] = repr(float(average[position + 1]) * 1.2)
+            lines[index + 1] = " ".join(average)
+            break
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+
+    row = [item for item in comparison.rows() if item.sub_item == "Main_mem"][0]
+    assert row.pct == pytest.approx(20.0, rel=1e-9)
+    assert row.degraded is True
+
+
 def test_基线值为零_无法计算百分比且不判为劣化(tmp_path):
     """真实数据里 lmbench3 的 Local_latencies @ RPC/UDP 基线平均值就是 0.0，百分比无定义。"""
     base_dir = tmp_path / "基础性能测试"
