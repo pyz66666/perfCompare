@@ -141,6 +141,7 @@ def test_汇总口径_unixbench直接取Index_Score并分单核多核两行(tmp_
         "netperf",
         "lmbench（带宽）",
         "lmbench（时延）",
+        "mysql-tpcc",
         "unixbench（单核）",
         "unixbench（多核）",
     }
@@ -196,6 +197,17 @@ def test_汇总口径_lmbench3分时延与带宽两行(tmp_path):
     by_label = {row.label: row for row in comparison.suite_rows()}
     assert by_label["lmbench（带宽）"].baseline == pytest.approx(11417.293096, rel=1e-6)
     assert by_label["lmbench（时延）"].baseline == pytest.approx(6.619522, rel=1e-6)
+
+
+def test_汇总口径_mysql_tpcc单行且行名用连字符(tmp_path):
+    """mysql_tpcc 汇总一行，行名按需求方要求写作 `mysql-tpcc`（连字符，非下划线）。"""
+    results = load(str(FIXTURE))
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    by_label = {row.label: row for row in comparison.suite_rows()}
+    # 汇总值经对数域几何平均计算，故有极小浮点尾差（单值亦然）。
+    assert by_label["mysql-tpcc"].baseline == pytest.approx(505267.31, rel=1e-12)
 
 
 def test_时延类指标变大_应判为劣化(tmp_path):

@@ -131,6 +131,8 @@ _SUMMARY_RECIPES = {
         ]
     },
     "unixbench": {"group_by": "core", "pick": "System_Benchmarks_Index_Score"},
+    # 行名按需求方要求写作 mysql-tpcc（连字符，非下划线）。
+    "mysql_tpcc": {"group_by": "item", "combine": True, "label": "mysql-tpcc"},
 }
 
 
@@ -199,7 +201,7 @@ def _suite_rows_for(suite, rows, threshold_pct):
         return [
             _row_from_values(
                 suite,
-                suite,
+                recipe.get("label", suite),
                 _geometric_mean([_group_value(g, pick, "baseline") for g in group_rows]),
                 _geometric_mean([_group_value(g, pick, "candidate") for g in group_rows]),
                 threshold_pct,

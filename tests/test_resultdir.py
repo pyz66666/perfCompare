@@ -59,3 +59,16 @@ def test_加载结果目录_覆盖长表族的六个基础测试套(tmp_path):
         )
         == 4634.3343
     )
+
+
+def test_加载结果目录_从日志里取出mysql_tpcc的tpmC(tmp_path):
+    """`mysql_tpcc.txt` 只有一行日志，值要按正则从 `Measured tpmC (NewOrders) = <值>` 取。"""
+    scenario_dir = tmp_path / "场景化测试"
+    scenario_dir.mkdir()
+    shutil.copy(
+        str(FIXTURE / "场景化测试" / "mysql_tpcc.txt"), str(scenario_dir / "mysql_tpcc.txt")
+    )
+
+    results = load(str(tmp_path))
+
+    assert results.value("mysql_tpcc", "tpmC", "") == 505267.31

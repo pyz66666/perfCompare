@@ -6,17 +6,19 @@
 契约（见 CONTEXT.md）：测量值以 (测试套, 测试项, 子项) 三级定位。
 """
 import os
+import re
 
-# 测试套 → (子目录, 文件名)。当前接入长表族的六个基础套；其余套
-# （SPEC CPU2017 CSV、场景化 JSON / 分组文本 / 日志正则 / 裸数字列）在后续任务里逐个加入。
+# 测试套 → (子目录, 文件名, 解析器)。目前接入长表族的六个基础套 + 日志正则族的 mysql_tpcc；
+# 其余套（SPEC CPU2017 CSV、场景化 JSON / 分组文本 / 裸数字列）在后续任务里逐个加入。
 # 注意 unixbench 的文件名带一个前导空格 —— 这是上游产物的真实情况，不要"顺手修掉"。
 _SUITE_FILES = {
-    "stream": ("基础性能测试", "stream.txt"),
-    "fio": ("基础性能测试", "fio.txt"),
-    "iozone3": ("基础性能测试", "iozone3.txt"),
-    "lmbench3": ("基础性能测试", "lmbench3.txt"),
-    "netperf": ("基础性能测试", "netperf.txt"),
-    "unixbench": ("基础性能测试", " unixbench-master.txt"),
+    "stream": ("基础性能测试", "stream.txt", None),
+    "fio": ("基础性能测试", "fio.txt", None),
+    "iozone3": ("基础性能测试", "iozone3.txt", None),
+    "lmbench3": ("基础性能测试", "lmbench3.txt", None),
+    "netperf": ("基础性能测试", "netperf.txt", None),
+    "unixbench": ("基础性能测试", " unixbench-master.txt", None),
+    "mysql_tpcc": ("场景化测试", "mysql_tpcc.txt", "tpmc_log"),
 }
 
 
@@ -41,11 +43,24 @@ class ResultSet:
 def load(directory):
     """读取结果目录，返回 ResultSet。"""
     suites = {}
-    for suite, (sub_dir, file_name) in _SUITE_FILES.items():
+    for suite, (sub_dir, file_name, parser_name) in _SUITE_FILES.items():
         path = os.path.join(directory, sub_dir, file_name)
         if os.path.isfile(path):
-            suites[suite] = _parse_long_table(path)
+            suites[suite] = _PARSERS[parser_name](path)
     return ResultSet(suites)
+
+
+def _parse_tpmc_log(path):
+    """从 jTPCC 日志里取出 tpmC：`Measured tpmC (NewOrders) = <值>`。
+
+    该文件只有一行日志，没有测试项与子项的结构，故用空字符串作为子项名。
+    """
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    match = re.search(r"Measured tpmC \(NewOrders\)\s*=\s*([0-9.]+)", text)
+    if match is None:
+        return {}
+    return {"tpmC": {"": float(match.group(1))}}
 
 
 def _parse_long_table(path):
@@ -71,3 +86,10 @@ def _parse_long_table(path):
         else:
             labels = line.split()
     return items
+
+
+# 解析器注册表。`_SUITE_FILES` 里用名字引用，避免在定义处前向引用函数。
+_PARSERS = {
+    None: _parse_long_table,
+    "tpmc_log": _parse_tpmc_log,
+}
