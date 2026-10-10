@@ -1,0 +1,13 @@
+{
+  "baseline": {
+    "path": "测试结果模版",
+    "kernel_version": "6.6.0-72.3.0"
+  },
+  "candidates": [
+    {
+      "path": "测试结果模版",
+      "kernel_version": "6.6.0-72.3.0"
+    }
+  ],
+  "threshold_pct": 5.0
+}

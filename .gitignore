@@ -15,6 +15,9 @@ report.html
 *.xlsx
 .kernel-cache.json
 
+# 本地配置（可能含内网路径），只入库 compare.example.json
+compare.json
+
 # 系统与 IDE 噪声
 .DS_Store
 .idea/

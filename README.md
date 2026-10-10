@@ -9,10 +9,15 @@
 需要 Python 3.8 ~ 3.13。唯一第三方依赖是 `openpyxl`（写 xlsx）。
 
 ```bash
-# 1. 准备配置文件（见下方格式）
-# 2. 执行比对
-python3 -m perf_compare --config compare.json --excel 对比表格.xlsx
+# 1. 准备配置文件（仓库自带可直接运行的示例，复制后改路径）
+cp compare.example.json compare.json
+
+# 2. 执行比对（输出目录需先存在）
+mkdir -p out
+python3 -m perf_compare --config compare.json --excel out/对比表格.xlsx
 ```
+
+`compare.json` 是你的本地配置（可能含内网路径），已被 `.gitignore` 排除；仓库里只保留示例 `compare.example.json`。完整的配置字段说明、排查方法见 [使用指南.md](./使用指南.md)。
 
 命令行参数：
 
