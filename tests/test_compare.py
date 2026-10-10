@@ -233,6 +233,19 @@ def test_汇总口径_其余三个场景化套(tmp_path):
     assert by_label["mysql_sysbench（oltp_read_write）"].baseline == pytest.approx(6658.3325)
 
 
+def test_汇总口径_flink_6000c三值求算术平均(tmp_path):
+    """flink_6000c：三行 read-records **求和取平均**（算术平均，不是几何平均）。
+
+    期望值 = (1749545840 + 1193304539 + 1839674039) / 3 = 1594174806.0。
+    """
+    results = load(str(FIXTURE))
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    by_label = {row.label: row for row in comparison.suite_rows()}
+    assert by_label["flink_6000c"].baseline == pytest.approx(1594174806.0, rel=1e-12)
+
+
 def test_汇总口径_mysql_tpcc单行且行名用连字符(tmp_path):
     """mysql_tpcc 汇总一行，行名按需求方要求写作 `mysql-tpcc`（连字符，非下划线）。"""
     results = load(str(FIXTURE))

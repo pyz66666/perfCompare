@@ -33,6 +33,9 @@ class SuiteRow:
     candidate: Optional[float]
     pct: Optional[float]
     degraded: bool
+    # 需要单位换算的行，按需求方要求以 Excel 公式呈现、保留原值（决策 D19）。
+    baseline_expr: Optional[str] = None
+    candidate_expr: Optional[str] = None
 
 
 class Comparison:
@@ -161,6 +164,10 @@ _SUMMARY_RECIPES = {
             ("mysql_sysbench（oltp_read_write）", ["oltp_read_write"], True),
         ]
     },
+    # flink_wordcount：值 ÷1000，且该除法在 Excel 里以公式呈现、保留原值（决策 D19）。
+    "flink_wordcount": {"group_by": "item", "combine": True, "display_scale": 1000},
+    # flink_6000c：三行 read-records 求和取平均（**算术平均**，不是几何平均）。
+    "flink_6000c": {"group_by": "item", "combine": True, "aggregate": "mean"},
 }
 
 
@@ -196,7 +203,26 @@ def _geometric_mean(values):
     usable = [value for value in values if value is not None and value > 0]
     if not usable:
         return None
+    if len(usable) == 1:
+        # 单个值的几何平均就是它本身。走对数域会引入浮点误差
+        # （116445015 → 116445014.99999988），会让 D19 的公式失去"保留原数据"的意义。
+        return usable[0]
     return math.exp(sum(math.log(value) for value in usable) / len(usable))
+
+
+def _arithmetic_mean(values):
+    """算术平均（flink_6000c 的三值求和取平均用这个，不是几何平均）。"""
+    usable = [value for value in values if value is not None]
+    if not usable:
+        return None
+    return sum(usable) / len(usable)
+
+
+def _aggregate(values, name):
+    """按口径选择归并方式：`mean` = 算术平均，其余（默认）= 几何平均。"""
+    if name == "mean":
+        return _arithmetic_mean(values)
+    return _geometric_mean(values)
 
 
 def _suite_level(rows, threshold_pct):
@@ -220,6 +246,8 @@ def _suite_rows_for(suite, rows, threshold_pct):
     if recipe.get("partition") is not None:
         return _partition_rows(suite, recipe, suite_all, threshold_pct)
 
+    aggregate = recipe.get("aggregate", "geomean")
+    display_scale = recipe.get("display_scale")
     groups = _groups_of(recipe, suite_all)
 
     pick = recipe.get("pick")
@@ -229,15 +257,22 @@ def _suite_rows_for(suite, rows, threshold_pct):
             _row_from_values(
                 suite,
                 recipe.get("label", suite),
-                _geometric_mean([_group_value(g, pick, "baseline") for g in group_rows]),
-                _geometric_mean([_group_value(g, pick, "candidate") for g in group_rows]),
+                _aggregate([_group_value(g, pick, "baseline", aggregate) for g in group_rows], aggregate),
+                _aggregate([_group_value(g, pick, "candidate", aggregate) for g in group_rows], aggregate),
                 threshold_pct,
+                display_scale=display_scale,
             )
         ]
 
     return [
         _make_suite_row(
-            suite, "{0}（{1}）".format(suite, name), rows_in_group, pick, threshold_pct
+            suite,
+            "{0}（{1}）".format(suite, name),
+            rows_in_group,
+            pick,
+            threshold_pct,
+            aggregate,
+            display_scale,
         )
         for name, rows_in_group in groups.items()
     ]
@@ -256,37 +291,51 @@ def _partition_rows(suite, recipe, suite_all, threshold_pct):
             listed.update(items)
 
     rows = []
+    aggregate = recipe.get("aggregate", "geomean")
+    display_scale = recipe.get("display_scale")
     for label, items, higher_is_better in partition:
         if items is None:
             selected = [row for row in suite_all if row.item not in listed]
         else:
             selected = [row for row in suite_all if row.item in items]
-        rows.append(_combined_row(suite, label, selected, threshold_pct, higher_is_better))
+        rows.append(
+            _combined_row(
+                suite, label, selected, threshold_pct, higher_is_better, aggregate, display_scale
+            )
+        )
 
     combine_all = recipe.get("combine_all")
     if combine_all is not None:
-        rows.append(_combined_row(suite, combine_all, suite_all, threshold_pct, True))
+        rows.append(
+            _combined_row(
+                suite, combine_all, suite_all, threshold_pct, True, aggregate, display_scale
+            )
+        )
     return rows
 
 
-def _combined_row(suite, label, selected, threshold_pct, higher_is_better):
+def _combined_row(
+    suite, label, selected, threshold_pct, higher_is_better, aggregate="geomean", display_scale=None
+):
     return _row_from_values(
         suite,
         label,
-        _combined_value(selected, "baseline"),
-        _combined_value(selected, "candidate"),
+        _combined_value(selected, "baseline", aggregate),
+        _combined_value(selected, "candidate", aggregate),
         threshold_pct,
         higher_is_better,
+        display_scale,
     )
 
 
-def _combined_value(rows, side):
-    """若干测试项合并成一个值：每个测试项内部先求几何平均，再对各测试项的值求几何平均。"""
+def _combined_value(rows, side, aggregate="geomean"):
+    """若干测试项合并成一个值：每个测试项内部先归并，再对各测试项的值归并。"""
     groups = {}
     for row in rows:
         groups.setdefault(row.item, []).append(row)
-    return _geometric_mean(
-        [_geometric_mean([getattr(row, side) for row in group]) for group in groups.values()]
+    return _aggregate(
+        [_aggregate([getattr(row, side) for row in group], aggregate) for group in groups.values()],
+        aggregate,
     )
 
 
@@ -303,27 +352,32 @@ def _groups_of(recipe, suite_all):
     return groups
 
 
-def _group_value(group_rows, pick, side):
-    """一个分组的唯一值：取指定子项，或对该分组的子项**用原始值**求几何平均。
+def _group_value(group_rows, pick, side, aggregate="geomean"):
+    """一个分组的唯一值：取指定子项，或对该分组的子项**用原始值**归并。
 
     用原始值（不按方向取倒数）是需求方确认的口径；方向只用于判定劣化。
     """
     if pick is not None:
         return _pick_sub_item(group_rows, pick, side)
-    return _geometric_mean([getattr(row, side) for row in group_rows])
+    return _aggregate([getattr(row, side) for row in group_rows], aggregate)
 
 
-def _make_suite_row(suite, label, group_rows, pick, threshold_pct):
+def _make_suite_row(
+    suite, label, group_rows, pick, threshold_pct, aggregate="geomean", display_scale=None
+):
     return _row_from_values(
         suite,
         label,
-        _group_value(group_rows, pick, "baseline"),
-        _group_value(group_rows, pick, "candidate"),
+        _group_value(group_rows, pick, "baseline", aggregate),
+        _group_value(group_rows, pick, "candidate", aggregate),
         threshold_pct,
+        display_scale=display_scale,
     )
 
 
-def _row_from_values(suite, label, base_value, cand_value, threshold_pct, higher_is_better=True):
+def _row_from_values(
+    suite, label, base_value, cand_value, threshold_pct, higher_is_better=True, display_scale=None
+):
     pct = None
     if base_value is not None and cand_value is not None and base_value != 0:
         pct = (cand_value - base_value) / base_value * 100.0
@@ -334,7 +388,26 @@ def _row_from_values(suite, label, base_value, cand_value, threshold_pct, higher
         candidate=cand_value,
         pct=pct,
         degraded=_is_degraded(pct, threshold_pct, higher_is_better),
+        baseline_expr=_scale_expr(base_value, display_scale),
+        candidate_expr=_scale_expr(cand_value, display_scale),
     )
+
+
+def _scale_expr(value, display_scale):
+    """按需求方要求把单位换算写成 Excel 公式、保留原值（决策 D19）。
+
+    例：值为 116445015、换算系数 1000 → `=116445015/1000`。
+    """
+    if display_scale is None or value is None:
+        return None
+    return "={0}/{1}".format(_plain_number(value), _plain_number(display_scale))
+
+
+def _plain_number(value):
+    """整数不带小数点，便于公式可读（`116445015` 而非 `116445015.0`）。"""
+    if float(value).is_integer():
+        return str(int(value))
+    return repr(value)
 
 
 def _pick_sub_item(group_rows, sub_item, side):

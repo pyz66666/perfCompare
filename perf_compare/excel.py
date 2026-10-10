@@ -37,8 +37,8 @@ def write_excel(comparison, path):
         summary.append(
             [
                 suite_row.label,
-                _数值(suite_row.baseline),
-                _数值(suite_row.candidate),
+                _显示值(suite_row.baseline_expr, suite_row.baseline),
+                _显示值(suite_row.candidate_expr, suite_row.candidate),
                 _格式百分比(suite_row.pct),
                 "是" if suite_row.degraded else "否",
             ]
@@ -101,6 +101,13 @@ def _标签(row):
 def _测量值(value):
     """单边缺失（某侧没有这个测量项，例如两侧核数不同）时显式写「缺失」，不留空白。"""
     return "缺失" if value is None else value
+
+
+def _显示值(expr, value):
+    """有显示表达式时写 **Excel 公式**（保留原值可追溯，决策 D19），否则写数值。"""
+    if expr is not None:
+        return expr
+    return _数值(value)
 
 
 def _数值(value):

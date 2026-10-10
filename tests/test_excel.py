@@ -63,6 +63,24 @@ def _明细行(workbook, sheet):
     ]
 
 
+def test_写出对比表格_flink_wordcount的单位换算写成公式(tmp_path):
+    """需求方要求 ÷1000 在 Excel 里**以公式呈现、保留原值**（决策 D19）。
+
+    单元格里应当是 `=116445015/1000`，而不是算好的 116445.015。
+    """
+    comparison = compare(load(str(FIXTURE)), load(str(FIXTURE)), threshold_pct=5.0)
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    rows = list(
+        openpyxl.load_workbook(str(out_path))["汇总"].iter_rows(values_only=True)
+    )
+    flink_row = [row for row in rows if row[0] == "flink_wordcount"][0]
+    assert flink_row[1] == "=116445015/1000"
+    assert flink_row[2] == "=116445015/1000"
+
+
 def test_写出对比表格_汇总表用分组标签作为行名(tmp_path):
     """unixbench 在汇总里占单核／多核两行，行名必须能区分，不能都叫 unixbench。"""
     comparison = compare(load(str(FIXTURE)), load(str(FIXTURE)), threshold_pct=5.0)

@@ -113,3 +113,23 @@ def test_加载结果目录_接入其余三个场景化套(tmp_path):
     # mysql_sysbench：每个测试项取 TPS 四次取值的平均（95th_latency 暂不显示）
     assert results.value("mysql_sysbench", "oltp_point_select", "TPS") == pytest.approx(126432.9)
     assert results.value("mysql_sysbench", "oltp_read_write", "TPS") == pytest.approx(6658.3325)
+
+
+def test_加载结果目录_接入flink_wordcount与flink_6000c(tmp_path):
+    """flink_wordcount：单条 JSON 记录，值可能是字符串。
+    flink_6000c：三行 `"read-records": N,`，作为同一测试项的多次取值（末尾裸数字不参与）。
+    """
+    scenario_dir = tmp_path / "场景化测试"
+    scenario_dir.mkdir()
+    for name in ("flink_wordcount.json", "flink_6000c.txt"):
+        shutil.copy(str(FIXTURE / "场景化测试" / name), str(scenario_dir / name))
+
+    results = load(str(tmp_path))
+
+    assert results.value("flink_wordcount", "flink", "") == 116445015.0
+
+    assert results.value("flink_6000c", "read-records", "1") == 1749545840.0
+    assert results.value("flink_6000c", "read-records", "2") == 1193304539.0
+    assert results.value("flink_6000c", "read-records", "3") == 1839674039.0
+    with pytest.raises(KeyError):
+        results.value("flink_6000c", "read-records", "4")

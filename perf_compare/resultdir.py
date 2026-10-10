@@ -24,6 +24,8 @@ _SUITE_FILES = {
     "flink_nexmark": ("场景化测试", "flink_nexmark.json", "flink_json"),
     "redis_docker": ("场景化测试", "redis_docker.txt", "redis_docker"),
     "mysql_sysbench": ("场景化测试", "mysql_sysBench.txt", "mysql_sysbench"),
+    "flink_wordcount": ("场景化测试", "flink_wordcount.json", "flink_json"),
+    "flink_6000c": ("场景化测试", "flink_6000c.txt", "flink_6000c"),
 }
 
 
@@ -161,6 +163,21 @@ def _parse_mysql_sysbench(path):
     return items
 
 
+def _parse_flink_6000c(path):
+    """`flink_6000c.txt` 是残缺片段：若干行 `"read-records": N,` 加末尾一个裸数字。
+
+    只取 `read-records` 那几行，按出现顺序编号为子项；末尾那个裸数字**不参与**
+    （需求方确认由三行求和取平均）。
+    """
+    values = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            match = re.search(r'"read-records":\s*([0-9.]+)', line)
+            if match is not None:
+                values.append(float(match.group(1)))
+    return {"read-records": {str(index + 1): value for index, value in enumerate(values)}}
+
+
 # 解析器注册表。`_SUITE_FILES` 里用名字引用，避免在定义处前向引用函数。
 _PARSERS = {
     None: _parse_long_table,
@@ -169,4 +186,5 @@ _PARSERS = {
     "flink_json": _parse_flink_json,
     "redis_docker": _parse_redis_docker,
     "mysql_sysbench": _parse_mysql_sysbench,
+    "flink_6000c": _parse_flink_6000c,
 }
