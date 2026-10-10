@@ -44,3 +44,25 @@ def test_命令行_读配置并写出对比表格(tmp_path):
 
     assert exit_code == 0
     assert excel_path.is_file()
+
+
+def test_命令行_出错时把堆栈写进日志并返回非零(tmp_path):
+    """报错要落到本地日志文件里，便于事后排查，而不是只在终端一闪而过。"""
+    log_dir = tmp_path / "logs"
+    missing_config = tmp_path / "不存在的配置.json"
+
+    exit_code = main(
+        [
+            "--config",
+            str(missing_config),
+            "--excel",
+            str(tmp_path / "对比表格.xlsx"),
+            "--log-dir",
+            str(log_dir),
+        ]
+    )
+
+    assert exit_code != 0
+    log_text = (log_dir / "perf-compare.log").read_text(encoding="utf-8")
+    assert "不存在的配置.json" in log_text
+    assert "Traceback" in log_text

@@ -10,6 +10,7 @@ venv/
 
 # 运行产物（由工具生成，不入库）
 out/
+logs/
 report.html
 *.xlsx
 .kernel-cache.json
