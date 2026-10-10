@@ -47,7 +47,7 @@ python3 -m perf_compare --config compare.json --excel out/对比表格.xlsx
 }
 ```
 
-- `baseline` / `candidates[].path`：**结果目录**的路径。一个结果目录里含 `基础性能测试/` 与 `场景化测试/` 两个子目录（缺失的套会被跳过，不报错）。
+- `baseline` / `candidates[].path`：**结果目录**的路径。结果文件**平铺**在该目录下（如 `<dir>/fio.txt`）；也兼容按类别放在 `基础性能测试/`、`场景化测试/` 子目录里的布局。目录里缺失的套会被跳过（不报错），运行时会打印读到与未找到的套清单。
 - `kernel_version`：被测系统的内核版本-发布号，用于换算 commitId（可留空）。
 - `threshold_pct`：劣化阈值，百分比。变化幅度**严格大于**该值才算劣化。
 - **基线不写死在代码里** —— 换版本只需改配置里哪个路径放在 `baseline`。

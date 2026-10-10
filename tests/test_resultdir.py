@@ -63,6 +63,26 @@ def test_加载结果目录_覆盖长表族的六个基础测试套(tmp_path):
     )
 
 
+def test_加载结果目录_结果文件平铺在目录里也能识别(tmp_path):
+    """真实环境里结果文件**平铺**在结果目录下，没有 基础性能测试/ 之类的子目录。
+
+    （样例模板按类别分了子目录，那只是为了便于查看；两种布局都要支持。）
+    """
+    shutil.copy(str(FIXTURE / "基础性能测试" / "fio.txt"), str(tmp_path / "fio.txt"))
+    shutil.copy(str(FIXTURE / "基础性能测试" / "stream.txt"), str(tmp_path / "stream.txt"))
+    shutil.copy(str(FIXTURE / "场景化测试" / "mysql_tpcc.txt"), str(tmp_path / "mysql_tpcc.txt"))
+
+    results = load(str(tmp_path))
+
+    assert results.value("fio", "read_iops_blocksize", "blocksize-4k") == 633106.3426
+    assert results.value("mysql_tpcc", "tpmC", "") == 505267.31
+    assert {suite for suite, _, _, _ in results.observations()} == {
+        "fio",
+        "stream",
+        "mysql_tpcc",
+    }
+
+
 def test_加载结果目录_从日志里取出mysql_tpcc的tpmC(tmp_path):
     """`mysql_tpcc.txt` 只有一行日志，值要按正则从 `Measured tpmC (NewOrders) = <值>` 取。"""
     scenario_dir = tmp_path / "场景化测试"

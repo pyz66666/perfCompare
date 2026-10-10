@@ -53,13 +53,30 @@ def expected_suites():
 
 
 def load(directory):
-    """读取结果目录，返回 ResultSet。"""
+    """读取结果目录，返回 ResultSet。
+
+    结果文件有两种真实存在的布局，都要支持：
+
+    - **平铺**（真实环境）：所有结果文件直接放在结果目录下，如 `<dir>/fio.txt`；
+    - **分类子目录**（样例模板）：`<dir>/基础性能测试/fio.txt`。
+
+    每个套先按类别子目录找，再按平铺找；都找不到就跳过该套（不报错）。
+    """
     suites = {}
     for suite, (sub_dir, file_name, parser_name) in _SUITE_FILES.items():
-        path = os.path.join(directory, sub_dir, file_name)
-        if os.path.isfile(path):
+        path = _locate(directory, sub_dir, file_name)
+        if path is not None:
             suites[suite] = _PARSERS[parser_name](path)
     return ResultSet(suites)
+
+
+def _locate(directory, sub_dir, file_name):
+    """定位一个结果文件；先试类别子目录，再试平铺。找不到返回 None。"""
+    for relative in (os.path.join(sub_dir, file_name), file_name):
+        path = os.path.join(directory, relative)
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def _parse_tpmc_log(path):

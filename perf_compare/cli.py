@@ -75,7 +75,7 @@ def _run(args):
         print(
             "两个结果目录里没有读到任何测试套，未生成表格。\n"
             "请检查配置里的 path 是否指向「结果目录」本身 ——\n"
-            "该目录下应当直接含 基础性能测试/ 与 场景化测试/ 两个子目录。",
+            "该目录下应当直接放着结果文件（如 fio.txt、stream.txt、mysql_tpcc.txt）。",
             file=sys.stderr,
         )
         return 3
