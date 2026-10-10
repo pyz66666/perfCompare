@@ -5,6 +5,7 @@
 
 契约（见 CONTEXT.md）：测量值以 (测试套, 测试项, 子项) 三级定位。
 """
+import json
 import os
 import re
 
@@ -19,6 +20,7 @@ _SUITE_FILES = {
     "netperf": ("基础性能测试", "netperf.txt", None),
     "unixbench": ("基础性能测试", " unixbench-master.txt", None),
     "mysql_tpcc": ("场景化测试", "mysql_tpcc.txt", "tpmc_log"),
+    "nginx": ("场景化测试", "nginx.json", "nginx_json"),
 }
 
 
@@ -88,8 +90,24 @@ def _parse_long_table(path):
     return items
 
 
+def _parse_nginx_json(path):
+    """`nginx.json`：一条记录里带 `workload_data[]`，每个 workload 的 performance_data 是一个值。
+
+    ⚠️ 记录**顶层**的 `performance_data`（样例 234564.88）**不读取** —— 需求方要求汇总
+    由四个 workload 自己求几何平均（与顶层值不同，见规划文档 8. nginx）。
+    """
+    with open(path, encoding="utf-8") as handle:
+        records = json.load(handle)
+    items = {}
+    for record in records:
+        for workload in record.get("workload_data", []):
+            items[workload["name"]] = {"": float(workload["performance_data"])}
+    return items
+
+
 # 解析器注册表。`_SUITE_FILES` 里用名字引用，避免在定义处前向引用函数。
 _PARSERS = {
     None: _parse_long_table,
     "tpmc_log": _parse_tpmc_log,
+    "nginx_json": _parse_nginx_json,
 }

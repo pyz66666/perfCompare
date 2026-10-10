@@ -142,6 +142,11 @@ def test_汇总口径_unixbench直接取Index_Score并分单核多核两行(tmp_
         "lmbench（带宽）",
         "lmbench（时延）",
         "mysql-tpcc",
+        "nginx（http短连接）",
+        "nginx（http长连接）",
+        "nginx（https短连接）",
+        "nginx（https长连接）",
+        "nginx（几何平均值）",
         "unixbench（单核）",
         "unixbench（多核）",
     }
@@ -197,6 +202,23 @@ def test_汇总口径_lmbench3分时延与带宽两行(tmp_path):
     by_label = {row.label: row for row in comparison.suite_rows()}
     assert by_label["lmbench（带宽）"].baseline == pytest.approx(11417.293096, rel=1e-6)
     assert by_label["lmbench（时延）"].baseline == pytest.approx(6.619522, rel=1e-6)
+
+
+def test_汇总口径_nginx四个workload加一行几何平均(tmp_path):
+    """nginx 汇总五行：四个 workload 各一行，再加一行四项的几何平均值。
+
+    期望值来自对样例数据的独立计算（几何平均 = 173360.160448，注意**不是**文件顶层的 234564.88）。
+    """
+    results = load(str(FIXTURE))
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    by_label = {row.label: row for row in comparison.suite_rows()}
+    assert by_label["nginx（http短连接）"].baseline == pytest.approx(204025.72, rel=1e-12)
+    assert by_label["nginx（http长连接）"].baseline == pytest.approx(407737.49, rel=1e-12)
+    assert by_label["nginx（https短连接）"].baseline == pytest.approx(43473.1, rel=1e-12)
+    assert by_label["nginx（https长连接）"].baseline == pytest.approx(249753.18, rel=1e-12)
+    assert by_label["nginx（几何平均值）"].baseline == pytest.approx(173360.160448, rel=1e-9)
 
 
 def test_汇总口径_mysql_tpcc单行且行名用连字符(tmp_path):

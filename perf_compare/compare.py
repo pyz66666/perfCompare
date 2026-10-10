@@ -133,6 +133,16 @@ _SUMMARY_RECIPES = {
     "unixbench": {"group_by": "core", "pick": "System_Benchmarks_Index_Score"},
     # 行名按需求方要求写作 mysql-tpcc（连字符，非下划线）。
     "mysql_tpcc": {"group_by": "item", "combine": True, "label": "mysql-tpcc"},
+    # nginx：四个 workload 各一行，另加一行四项的几何平均。
+    "nginx": {
+        "partition": [
+            ("nginx（http短连接）", ["http_short"], True),
+            ("nginx（http长连接）", ["http_long"], True),
+            ("nginx（https短连接）", ["https_short"], True),
+            ("nginx（https长连接）", ["https_long"], True),
+        ],
+        "combine_all": "nginx（几何平均值）",
+    },
 }
 
 
@@ -189,9 +199,8 @@ def _suite_rows_for(suite, rows, threshold_pct):
     if recipe is None:
         return [_make_suite_row(suite, suite, suite_all, None, threshold_pct)]
 
-    partition = recipe.get("partition")
-    if partition is not None:
-        return _partition_rows(suite, partition, suite_all, threshold_pct)
+    if recipe.get("partition") is not None:
+        return _partition_rows(suite, recipe, suite_all, threshold_pct)
 
     groups = _groups_of(recipe, suite_all)
 
@@ -216,11 +225,13 @@ def _suite_rows_for(suite, rows, threshold_pct):
     ]
 
 
-def _partition_rows(suite, partition, suite_all, threshold_pct):
+def _partition_rows(suite, recipe, suite_all, threshold_pct):
     """按显式划分产出多行（`partition` 每项 = 行名、测试项集合、方向）。
 
-    集合为 `None` 表示「其余全部测试项」。每行内部先按测试项求几何平均，再合并成一个值。
+    集合为 `None` 表示「其余全部测试项」。另外 `combine_all` 可指定**再补一行**
+    「全部测试项合并值」—— nginx 的「几何平均值」行即此类。
     """
+    partition = recipe["partition"]
     listed = set()
     for _, items, _ in partition:
         if items is not None:
@@ -232,17 +243,23 @@ def _partition_rows(suite, partition, suite_all, threshold_pct):
             selected = [row for row in suite_all if row.item not in listed]
         else:
             selected = [row for row in suite_all if row.item in items]
-        rows.append(
-            _row_from_values(
-                suite,
-                label,
-                _combined_value(selected, "baseline"),
-                _combined_value(selected, "candidate"),
-                threshold_pct,
-                higher_is_better,
-            )
-        )
+        rows.append(_combined_row(suite, label, selected, threshold_pct, higher_is_better))
+
+    combine_all = recipe.get("combine_all")
+    if combine_all is not None:
+        rows.append(_combined_row(suite, combine_all, suite_all, threshold_pct, True))
     return rows
+
+
+def _combined_row(suite, label, selected, threshold_pct, higher_is_better):
+    return _row_from_values(
+        suite,
+        label,
+        _combined_value(selected, "baseline"),
+        _combined_value(selected, "candidate"),
+        threshold_pct,
+        higher_is_better,
+    )
 
 
 def _combined_value(rows, side):

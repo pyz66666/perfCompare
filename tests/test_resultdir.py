@@ -72,3 +72,20 @@ def test_加载结果目录_从日志里取出mysql_tpcc的tpmC(tmp_path):
     results = load(str(tmp_path))
 
     assert results.value("mysql_tpcc", "tpmC", "") == 505267.31
+
+
+def test_加载结果目录_从nginx_json取出四个workload(tmp_path):
+    """`nginx.json` 一条记录里带 `workload_data[]`，每个 workload 的 performance_data 是一个值。
+
+    记录顶层的 performance_data（样例 234564.88）不使用 —— 汇总由四个 workload 自己算。
+    """
+    scenario_dir = tmp_path / "场景化测试"
+    scenario_dir.mkdir()
+    shutil.copy(str(FIXTURE / "场景化测试" / "nginx.json"), str(scenario_dir / "nginx.json"))
+
+    results = load(str(tmp_path))
+
+    assert results.value("nginx", "http_short", "") == 204025.72
+    assert results.value("nginx", "http_long", "") == 407737.49
+    assert results.value("nginx", "https_short", "") == 43473.1
+    assert results.value("nginx", "https_long", "") == 249753.18
