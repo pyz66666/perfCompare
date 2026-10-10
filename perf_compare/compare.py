@@ -143,6 +143,24 @@ _SUMMARY_RECIPES = {
         ],
         "combine_all": "nginx（几何平均值）",
     },
+    # flink_nexmark：只取 testcase_name == "sum" 那一条作为结果。
+    "flink_nexmark": {"partition": [("flink_nexmark", ["sum"], True)]},
+    # redis_docker：set / get 各一行（各自四个 docker 的几何平均），再加一行两者合并。
+    "redis_docker": {
+        "partition": [
+            ("redis_docker（set）", ["set"], True),
+            ("redis_docker（get）", ["get"], True),
+        ],
+        "combine_all": "redis_docker（几何平均值）",
+    },
+    # mysql_sysbench：每个测试项一行（只取 TPS 的四次平均）。
+    "mysql_sysbench": {
+        "partition": [
+            ("mysql_sysbench（oltp_point_select）", ["oltp_point_select"], True),
+            ("mysql_sysbench（oltp_read_only）", ["oltp_read_only"], True),
+            ("mysql_sysbench（oltp_read_write）", ["oltp_read_write"], True),
+        ]
+    },
 }
 
 

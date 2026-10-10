@@ -134,22 +134,10 @@ def test_汇总口径_unixbench直接取Index_Score并分单核多核两行(tmp_
     comparison = compare(results, results, threshold_pct=5.0)
 
     by_label = {row.label: row for row in comparison.suite_rows()}
-    assert set(by_label) == {
-        "stream",
-        "fio",
-        "iozone3",
-        "netperf",
-        "lmbench（带宽）",
-        "lmbench（时延）",
-        "mysql-tpcc",
-        "nginx（http短连接）",
-        "nginx（http长连接）",
-        "nginx（https短连接）",
-        "nginx（https长连接）",
-        "nginx（几何平均值）",
-        "unixbench（单核）",
-        "unixbench（多核）",
-    }
+    # 只钉 unixbench 自身的拆分行为，不枚举全部套（否则每接入一个套都要改这里）。
+    assert "unixbench（单核）" in by_label
+    assert "unixbench（多核）" in by_label
+    assert "unixbench" not in by_label
     assert by_label["unixbench（单核）"].baseline == 1082.19
     assert by_label["unixbench（多核）"].baseline == 23032.61
 
@@ -219,6 +207,30 @@ def test_汇总口径_nginx四个workload加一行几何平均(tmp_path):
     assert by_label["nginx（https短连接）"].baseline == pytest.approx(43473.1, rel=1e-12)
     assert by_label["nginx（https长连接）"].baseline == pytest.approx(249753.18, rel=1e-12)
     assert by_label["nginx（几何平均值）"].baseline == pytest.approx(173360.160448, rel=1e-9)
+
+
+def test_汇总口径_其余三个场景化套(tmp_path):
+    """flink_nexmark 取 sum 一行；redis_docker 三行；mysql_sysbench 每测试项一行。
+
+    期望值均来自对样例数据的独立计算。
+    """
+    results = load(str(FIXTURE))
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    by_label = {row.label: row for row in comparison.suite_rows()}
+
+    assert by_label["flink_nexmark"].baseline == pytest.approx(3815.46)
+    assert "q0" not in by_label
+
+    assert by_label["redis_docker（set）"].baseline == pytest.approx(134116.668404, rel=1e-9)
+    assert by_label["redis_docker（get）"].baseline == pytest.approx(114010.208471, rel=1e-9)
+    assert by_label["redis_docker（几何平均值）"].baseline == pytest.approx(
+        123655.445995, rel=1e-9
+    )
+
+    assert by_label["mysql_sysbench（oltp_point_select）"].baseline == pytest.approx(126432.9)
+    assert by_label["mysql_sysbench（oltp_read_write）"].baseline == pytest.approx(6658.3325)
 
 
 def test_汇总口径_mysql_tpcc单行且行名用连字符(tmp_path):

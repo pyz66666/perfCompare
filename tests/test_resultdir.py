@@ -5,6 +5,8 @@
 import shutil
 from pathlib import Path
 
+import pytest
+
 from perf_compare.resultdir import load
 
 FIXTURE = Path(__file__).resolve().parents[1] / "测试结果模版"
@@ -89,3 +91,25 @@ def test_加载结果目录_从nginx_json取出四个workload(tmp_path):
     assert results.value("nginx", "http_long", "") == 407737.49
     assert results.value("nginx", "https_short", "") == 43473.1
     assert results.value("nginx", "https_long", "") == 249753.18
+
+
+def test_加载结果目录_接入其余三个场景化套(tmp_path):
+    """一次接入三个套的解析：flink_nexmark、redis_docker、mysql_sysbench。"""
+    scenario_dir = tmp_path / "场景化测试"
+    scenario_dir.mkdir()
+    for name in ("flink_nexmark.json", "redis_docker.txt", "mysql_sysBench.txt"):
+        shutil.copy(str(FIXTURE / "场景化测试" / name), str(scenario_dir / name))
+
+    results = load(str(tmp_path))
+
+    # flink_nexmark：每个 testcase 一条；performance_data 可能是字符串也可能是数字（事实 F7）
+    assert results.value("flink_nexmark", "sum", "") == 3815.46
+    assert results.value("flink_nexmark", "q0", "") == 211.88
+
+    # redis_docker：只取 docker1..docker4，跳过文件自带的 avg / geom 两列
+    assert results.value("redis_docker", "set", "docker1") == 145074.29
+    assert results.value("redis_docker", "get", "docker4") == 74140.25
+
+    # mysql_sysbench：每个测试项取 TPS 四次取值的平均（95th_latency 暂不显示）
+    assert results.value("mysql_sysbench", "oltp_point_select", "TPS") == pytest.approx(126432.9)
+    assert results.value("mysql_sysbench", "oltp_read_write", "TPS") == pytest.approx(6658.3325)

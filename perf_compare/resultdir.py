@@ -21,6 +21,9 @@ _SUITE_FILES = {
     "unixbench": ("基础性能测试", " unixbench-master.txt", None),
     "mysql_tpcc": ("场景化测试", "mysql_tpcc.txt", "tpmc_log"),
     "nginx": ("场景化测试", "nginx.json", "nginx_json"),
+    "flink_nexmark": ("场景化测试", "flink_nexmark.json", "flink_json"),
+    "redis_docker": ("场景化测试", "redis_docker.txt", "redis_docker"),
+    "mysql_sysbench": ("场景化测试", "mysql_sysBench.txt", "mysql_sysbench"),
 }
 
 
@@ -105,9 +108,65 @@ def _parse_nginx_json(path):
     return items
 
 
+def _parse_flink_json(path):
+    """flink 系列 JSON：每条记录 = 一个 testcase，`performance_data` 即该用例的值。
+
+    ⚠️ 该字段在样例里有时是数字、有时是字符串（事实 F7），统一转成 float。
+    没有 `testcase_name` 的记录跳过。
+    """
+    with open(path, encoding="utf-8") as handle:
+        records = json.load(handle)
+    items = {}
+    for record in records:
+        name = record.get("testcase_name")
+        if name is None:
+            continue
+        items[name] = {"": float(record["performance_data"])}
+    return items
+
+
+def _parse_redis_docker(path):
+    """`redis_docker.txt` 与长表同形，但**跳过文件自带的 `avg` 与 `geom` 两列**。
+
+    `geom` 列在样例里与四个 docker 的几何平均并不一致（模拟数据假象），
+    且需求方要求由四个 docker 自己算，故不采用自带列。
+    """
+    items = {}
+    for item, subs in _parse_long_table(path).items():
+        items[item] = {
+            sub: value for sub, value in subs.items() if re.match(r"docker\d+$", sub)
+        }
+    return items
+
+
+def _parse_mysql_sysbench(path):
+    """`mysql_sysBench.txt`：一行测试项名，随后若干行 `<指标> v1 v2 v3 v4`。
+
+    只取 `TPS` 指标，值为四次取值的**算术平均**；`95th_latency` 暂不显示（需求方确认）。
+    """
+    items = {}
+    current = None
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            parts = line.split()
+            if not parts:
+                continue
+            if len(parts) == 1:
+                current = parts[0]
+                continue
+            if current is None or parts[0] != "TPS":
+                continue
+            values = [float(text) for text in parts[1:]]
+            items[current] = {"TPS": sum(values) / len(values)}
+    return items
+
+
 # 解析器注册表。`_SUITE_FILES` 里用名字引用，避免在定义处前向引用函数。
 _PARSERS = {
     None: _parse_long_table,
     "tpmc_log": _parse_tpmc_log,
     "nginx_json": _parse_nginx_json,
+    "flink_json": _parse_flink_json,
+    "redis_docker": _parse_redis_docker,
+    "mysql_sysbench": _parse_mysql_sysbench,
 }
