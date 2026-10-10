@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perf-compare"
+version = "0.1.0"
+description = "性能测试结果横向比对与劣化分析，产出 Excel 对比表格"
+requires-python = ">=3.8"
+dependencies = ["openpyxl"]
+
+[project.scripts]
+perf-compare = "perf_compare.cli:main"
+
+[tool.setuptools]
+# 显式声明包，避免 setuptools 在扁平布局下把 tests/、docs/ 等也当作包来发现。
+packages = ["perf_compare"]

@@ -12,10 +12,12 @@
 # 1. 准备配置文件（仓库自带可直接运行的示例，复制后改路径）
 cp compare.example.json compare.json
 
-# 2. 执行比对（输出目录需先存在）
+# 2. 在项目目录下执行（输出目录需先存在）
 mkdir -p out
 python3 -m perf_compare --config compare.json --excel out/对比表格.xlsx
 ```
+
+⚠️ `python3 -m perf_compare` **必须在项目目录下运行**，否则报 `No module named perf_compare`。另两种方式（设 `PYTHONPATH`、或 `pip install .` 后直接用 `perf-compare` 命令）见使用指南。
 
 `compare.json` 是你的本地配置（可能含内网路径），已被 `.gitignore` 排除；仓库里只保留示例 `compare.example.json`。完整的配置字段说明、排查方法见 [使用指南.md](./使用指南.md)。
 
