@@ -123,6 +123,13 @@ _SUMMARY_RECIPES = {
     "fio": {"group_by": "item", "combine": True},
     "iozone3": {"group_by": "item", "combine": True},
     "netperf": {"group_by": "item", "combine": True},
+    # lmbench3 分成两行，且**时延用原始值**（不取倒数）：方向只影响劣化判定。
+    "lmbench3": {
+        "partition": [
+            ("lmbench（带宽）", ["Local_bandwidths"], True),
+            ("lmbench（时延）", None, False),
+        ]
+    },
     "unixbench": {"group_by": "core", "pick": "System_Benchmarks_Index_Score"},
 }
 
@@ -143,22 +150,20 @@ def _higher_is_better(item):
 
 
 def _normalized(value, higher_is_better):
-    """把测量值换算成「越大越好」的口径，供几何平均使用。
-
-    几何平均要求正数；单边缺失（None）与 0 值一律排除，不参与套级归并。
-    """
+    """（已不再使用）原先用于把测量值归一化成「越大越好」，现已改为用原始值计算。"""
     if value is None or value <= 0:
         return None
     return value if higher_is_better else 1.0 / value
 
 
 def _geometric_mean(values):
-    """在对数域求几何平均。
+    """在对数域求几何平均，**非正值（含 0 与缺失）一律排除**。
 
-    朴素连乘在这类数据上必然出事：fio 有 96 个子项、量级约 1e5，乘积约 1e480 会溢出成
-    inf，而 Excel 存不下 inf（读回来是空值）。对数域没有这个问题。
+    排除 0 值：几何平均要求全部为正数，只要有一个 0 整组结果就会变成 0（需求方确认）。
+    用对数域：fio 有 96 个子项、量级约 1e5，朴素连乘乘积约 1e480 会溢出成 inf，
+    而 Excel 存不下 inf（读回来是空值）。
     """
-    usable = [value for value in values if value is not None]
+    usable = [value for value in values if value is not None and value > 0]
     if not usable:
         return None
     return math.exp(sum(math.log(value) for value in usable) / len(usable))
@@ -181,6 +186,10 @@ def _suite_rows_for(suite, rows, threshold_pct):
     recipe = _SUMMARY_RECIPES.get(suite)
     if recipe is None:
         return [_make_suite_row(suite, suite, suite_all, None, threshold_pct)]
+
+    partition = recipe.get("partition")
+    if partition is not None:
+        return _partition_rows(suite, partition, suite_all, threshold_pct)
 
     groups = _groups_of(recipe, suite_all)
 
@@ -205,6 +214,45 @@ def _suite_rows_for(suite, rows, threshold_pct):
     ]
 
 
+def _partition_rows(suite, partition, suite_all, threshold_pct):
+    """按显式划分产出多行（`partition` 每项 = 行名、测试项集合、方向）。
+
+    集合为 `None` 表示「其余全部测试项」。每行内部先按测试项求几何平均，再合并成一个值。
+    """
+    listed = set()
+    for _, items, _ in partition:
+        if items is not None:
+            listed.update(items)
+
+    rows = []
+    for label, items, higher_is_better in partition:
+        if items is None:
+            selected = [row for row in suite_all if row.item not in listed]
+        else:
+            selected = [row for row in suite_all if row.item in items]
+        rows.append(
+            _row_from_values(
+                suite,
+                label,
+                _combined_value(selected, "baseline"),
+                _combined_value(selected, "candidate"),
+                threshold_pct,
+                higher_is_better,
+            )
+        )
+    return rows
+
+
+def _combined_value(rows, side):
+    """若干测试项合并成一个值：每个测试项内部先求几何平均，再对各测试项的值求几何平均。"""
+    groups = {}
+    for row in rows:
+        groups.setdefault(row.item, []).append(row)
+    return _geometric_mean(
+        [_geometric_mean([getattr(row, side) for row in group]) for group in groups.values()]
+    )
+
+
 def _groups_of(recipe, suite_all):
     """按口径分组。`core` → 单核／多核；`item` → 每个测试项一组。"""
     by_item = recipe.get("group_by") == "item"
@@ -219,12 +267,13 @@ def _groups_of(recipe, suite_all):
 
 
 def _group_value(group_rows, pick, side):
-    """一个分组的唯一值：取指定子项，或对该分组的子项按方向归一化后求几何平均。"""
+    """一个分组的唯一值：取指定子项，或对该分组的子项**用原始值**求几何平均。
+
+    用原始值（不按方向取倒数）是需求方确认的口径；方向只用于判定劣化。
+    """
     if pick is not None:
         return _pick_sub_item(group_rows, pick, side)
-    return _geometric_mean(
-        [_normalized(getattr(row, side), _higher_is_better(row.item)) for row in group_rows]
-    )
+    return _geometric_mean([getattr(row, side) for row in group_rows])
 
 
 def _make_suite_row(suite, label, group_rows, pick, threshold_pct):

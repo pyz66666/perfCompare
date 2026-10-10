@@ -138,8 +138,9 @@ def test_汇总口径_unixbench直接取Index_Score并分单核多核两行(tmp_
         "stream",
         "fio",
         "iozone3",
-        "lmbench3",
         "netperf",
+        "lmbench（带宽）",
+        "lmbench（时延）",
         "unixbench（单核）",
         "unixbench（多核）",
     }
@@ -177,6 +178,24 @@ def test_两版本测试项名不一致_列为单边缺失而不崩溃(tmp_path)
     assert candidate_only.candidate == 100.0
     assert candidate_only.pct is None
     assert candidate_only.degraded is False
+
+
+def test_汇总口径_lmbench3分时延与带宽两行(tmp_path):
+    """lmbench3 汇总两行（需求方确认）：
+
+    - `lmbench（带宽）` = `Local_bandwidths` 全部 9 个子项的几何平均；
+    - `lmbench（时延）` = 其余 5 个测试项各自内部几何平均后，再合并。
+
+    时延**用原始值**（µs，不取倒数），值为 0 的子项排除。期望值来自对样例数据的
+    独立计算：带宽 11417.293096、时延 6.619522。
+    """
+    results = load(str(FIXTURE))
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    by_label = {row.label: row for row in comparison.suite_rows()}
+    assert by_label["lmbench（带宽）"].baseline == pytest.approx(11417.293096, rel=1e-6)
+    assert by_label["lmbench（时延）"].baseline == pytest.approx(6.619522, rel=1e-6)
 
 
 def test_时延类指标变大_应判为劣化(tmp_path):
