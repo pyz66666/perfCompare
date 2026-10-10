@@ -15,7 +15,7 @@ import traceback
 from .compare import compare
 from .config import load_config
 from .excel import write_excel
-from .resultdir import load
+from .resultdir import expected_suites, load
 
 LOG_FILE_NAME = "perf-compare.log"
 DEFAULT_LOG_DIR = "logs"
@@ -57,11 +57,48 @@ def _run(args):
         )
         return 2
 
-    baseline = load(config.baseline.path)
-    candidate = load(config.candidates[0].path)
+    baseline_path = config.baseline.path
+    candidate_path = config.candidates[0].path
+    baseline = load(baseline_path)
+    candidate = load(candidate_path)
+
+    # 主动交代「读到什么、缺什么」—— 结果目录里缺失的套会被静默跳过，
+    # 不打印出来的话，用户无从判断是数据不全还是路径填错了。
+    _report_read(baseline_path, baseline, "基线")
+    _report_read(candidate_path, candidate, "对比")
+
     comparison = compare(baseline, candidate, config.threshold_pct)
+    rows = comparison.rows()
+
+    if not rows:
+        # 退出码 0 + 空表是最危险的失败方式：用户会以为跑成功了。
+        print(
+            "两个结果目录里没有读到任何测试套，未生成表格。\n"
+            "请检查配置里的 path 是否指向「结果目录」本身 ——\n"
+            "该目录下应当直接含 基础性能测试/ 与 场景化测试/ 两个子目录。",
+            file=sys.stderr,
+        )
+        return 3
+
     write_excel(comparison, args.excel)
+    print(
+        "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(
+            args.excel,
+            len(rows),
+            sum(1 for row in rows if row.baseline is None or row.candidate is None),
+            sum(1 for row in rows if row.degraded),
+        )
+    )
     return 0
+
+
+def _report_read(path, results, label):
+    """打印某一侧读到的测试套，以及本工具认识但没找到的套。"""
+    found = sorted({suite for suite, _, _, _ in results.observations()})
+    print("{0} {1}：读到 {2} 个测试套 {3}".format(label, path, len(found), found))
+    missing = [name for name in expected_suites() if name not in found]
+    if missing:
+        print("    未找到：{0}".format(missing))
 
 
 def _write_error_log(log_dir, argv):

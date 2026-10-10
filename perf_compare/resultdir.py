@@ -47,6 +47,11 @@ class ResultSet:
                     yield suite, item, sub_item, self._suites[suite][item][sub_item]
 
 
+def expected_suites():
+    """本工具认识的全部测试套名（用于诊断「哪些套没读到」）。"""
+    return sorted(_SUITE_FILES)
+
+
 def load(directory):
     """读取结果目录，返回 ResultSet。"""
     suites = {}
