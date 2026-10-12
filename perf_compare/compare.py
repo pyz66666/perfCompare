@@ -41,9 +41,10 @@ class SuiteRow:
 class Comparison:
     """一次比对的全部结果：逐子项 + 套级。"""
 
-    def __init__(self, rows, suite_rows):
+    def __init__(self, rows, suite_rows, excluded_suites=None):
         self._rows = list(rows)
         self._suite_rows = list(suite_rows)
+        self._excluded_suites = list(excluded_suites or [])
 
     def rows(self):
         """按稳定顺序返回全部逐子项比对面。"""
@@ -53,12 +54,20 @@ class Comparison:
         """按稳定顺序返回全部套级比对面。"""
         return list(self._suite_rows)
 
+    def excluded_suites(self):
+        """只在某一侧出现、因而未参与对比的测试套。"""
+        return list(self._excluded_suites)
+
 
 def compare(baseline, candidate, threshold_pct):
     """比对基线与对比结果集，返回 Comparison。
 
-    配对按两侧测量值的**并集**进行：测试项名编码了核数（如 `384_Core`），两侧核数不同时
-    项名对不上，此时各自独有的项列为「单边缺失」（值为 None），既不崩溃也不被静默忽略。
+    **只比对两侧都包含的测试套**（需求方 2026-10-12）：基线有 5 个套、对比只有 2 个时，
+    只比这 2 个；只在一侧出现的套不参与对比，也不产生满屏「缺失」行 —— 被排除的套可查
+    `excluded_suites()`。
+
+    同一套**内部**若测试项名对不上（例如两侧核数不同导致 `384_Core` 对 `256_Core`），
+    仍按单边缺失显式列出，不静默丢弃。
     """
     base_map = {
         (suite, item, sub_item): value
@@ -69,8 +78,13 @@ def compare(baseline, candidate, threshold_pct):
         for suite, item, sub_item, value in candidate.observations()
     }
 
+    base_suites = {suite for suite, _, _ in base_map}
+    cand_suites = {suite for suite, _, _ in cand_map}
+    common_suites = base_suites & cand_suites
+    excluded_suites = sorted((base_suites | cand_suites) - common_suites)
+
     rows = []
-    for key in sorted(set(base_map) | set(cand_map)):
+    for key in sorted(key for key in set(base_map) | set(cand_map) if key[0] in common_suites):
         suite, item, sub_item = key
         base_value = base_map.get(key)
         cand_value = cand_map.get(key)
@@ -91,7 +105,7 @@ def compare(baseline, candidate, threshold_pct):
                 degraded=_is_degraded(pct, threshold_pct, _higher_is_better(item)),
             )
         )
-    return Comparison(rows, _suite_level(rows, threshold_pct))
+    return Comparison(rows, _suite_level(rows, threshold_pct), excluded_suites)
 
 
 def _is_degraded(pct, threshold_pct, higher_is_better=True):

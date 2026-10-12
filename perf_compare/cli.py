@@ -80,6 +80,13 @@ def _run(args):
         )
         return 3
 
+    excluded = comparison.excluded_suites()
+    if excluded:
+        # 只在一侧存在的套不参与对比，但必须说明，不能静默不出现。
+        print(
+            "只在一侧出现、未纳入对比的测试套：{0}（只比对两侧都包含的套）".format(excluded)
+        )
+
     write_excel(comparison, args.excel)
     print(
         "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(

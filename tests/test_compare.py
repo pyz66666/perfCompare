@@ -257,6 +257,31 @@ def test_汇总口径_mysql_tpcc单行且行名用连字符(tmp_path):
     assert by_label["mysql-tpcc"].baseline == pytest.approx(505267.31, rel=1e-12)
 
 
+def test_只比对两侧都包含的测试套(tmp_path):
+    """基线有多个套、对比只有其中一部分时，只比对**两者都包含**的套（需求方 2026-10-12）。
+
+    只在一侧出现的套不参与对比（也不产生一堆「缺失」行），但要在结果里说明被排除的是哪些。
+    """
+    for side, files in (
+        ("baseline", ["fio.txt", "stream.txt", "netperf.txt"]),
+        ("candidate", ["fio.txt", "stream.txt"]),
+    ):
+        target = tmp_path / side / "基础性能测试"
+        target.mkdir(parents=True)
+        for name in files:
+            shutil.copy(str(FIXTURE / "基础性能测试" / name), str(target / name))
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+
+    assert {row.suite for row in comparison.rows()} == {"fio", "stream"}
+    assert [row.suite for row in comparison.suite_rows()] == ["fio", "stream"]
+    assert comparison.excluded_suites() == ["netperf"]
+
+
 def test_时延类指标变大_应判为劣化(tmp_path):
     """时延是「越小越好」：**变大**才是劣化。
 
