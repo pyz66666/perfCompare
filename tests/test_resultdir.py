@@ -135,6 +135,34 @@ def test_加载结果目录_接入其余三个场景化套(tmp_path):
     assert results.value("mysql_sysbench", "oltp_read_write", "TPS") == pytest.approx(6658.3325)
 
 
+def test_加载结果目录_解析spark与spark_docker(tmp_path):
+    """`spark.out` = 103 项 × 3 轮 + 1 个汇总（汇总值需 ÷3 得到单轮平均）；
+    `spark_docker.out0/1/2` = 三个文件各代表一个 docker（一套多文件）。
+
+    期望值直接取自样例文件：
+    spark.out 的 [0]/[103]/[206] = 33.498/31.663/30.929；
+    out0/out1/out2 的第 1 个值 = 24.92/14.981/23.628。
+    """
+    scenario_dir = tmp_path / "场景化测试"
+    scenario_dir.mkdir()
+    for name in ("spark.out", "spark_docker.out0", "spark_docker.out1", "spark_docker.out2"):
+        shutil.copy(str(FIXTURE / "场景化测试" / name), str(scenario_dir / name))
+
+    results = load(str(tmp_path))
+
+    # spark：保留每轮，另给三轮平均
+    assert results.value("spark", "native_q1", "轮1") == 33.498
+    assert results.value("spark", "native_q1", "轮2") == 31.663
+    assert results.value("spark", "native_q1", "轮3") == 30.929
+    assert results.value("spark", "native_q1", "avg") == pytest.approx(32.03)
+
+    # spark_docker：三个 docker 各一列 + 平均值
+    assert results.value("spark_docker", "native_q1", "docker0") == 24.92
+    assert results.value("spark_docker", "native_q1", "docker1") == 14.981
+    assert results.value("spark_docker", "native_q1", "docker2") == 23.628
+    assert results.value("spark_docker", "native_q1", "avg") == pytest.approx(21.176333333333336)
+
+
 def test_加载结果目录_接入flink_wordcount与flink_6000c(tmp_path):
     """flink_wordcount：单条 JSON 记录，值可能是字符串。
     flink_6000c：三行 `"read-records": N,`，作为同一测试项的多次取值（末尾裸数字不参与）。

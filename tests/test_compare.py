@@ -282,6 +282,45 @@ def test_只比对两侧都包含的测试套(tmp_path):
     assert comparison.excluded_suites() == ["netperf"]
 
 
+def test_汇总口径_spark与spark_docker(tmp_path):
+    """spark 汇总行 = 文件末尾汇总值 ÷3（23824.969/3 = 7941.656333…）；
+    spark_docker 汇总行 = 三个 docker 汇总值的平均（5390.76/5794.284/6101.824）。"""
+    results = load(str(FIXTURE))
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    by_label = {row.label: row for row in comparison.suite_rows()}
+    assert by_label["spark"].baseline == pytest.approx(7941.656333333333)
+    assert by_label["spark_docker"].baseline == pytest.approx(5762.289333333333)
+
+
+def test_spark执行时间变大应判为劣化且只判定avg(tmp_path):
+    """spark 的值是执行时间，方向与带宽相反：**变大才是劣化**（需求方 2026-10-12）。
+    且按需求方口径只对比平均值，轮次列仅展示、不判定。
+
+    算例：把 native_q1 三轮各上调 20%，则 avg 也上升 20%。
+    """
+    for side, factor in (("baseline", 1.0), ("candidate", 1.2)):
+        target = tmp_path / side / "场景化测试"
+        target.mkdir(parents=True)
+        values = (FIXTURE / "场景化测试" / "spark.out").read_text(encoding="utf-8").split()
+        if factor != 1.0:
+            for index in (0, 103, 206):
+                values[index] = repr(float(values[index]) * factor)
+        (target / "spark.out").write_text("\n".join(values) + "\n", encoding="utf-8")
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+
+    rows = {(row.item, row.sub_item): row for row in comparison.rows()}
+    assert rows[("native_q1", "avg")].pct == pytest.approx(20.0, rel=1e-6)
+    assert rows[("native_q1", "avg")].degraded is True
+    assert rows[("native_q1", "轮1")].degraded is False
+
+
 def test_时延类指标变大_应判为劣化(tmp_path):
     """时延是「越小越好」：**变大**才是劣化。
 

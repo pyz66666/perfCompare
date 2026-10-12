@@ -102,7 +102,11 @@ def compare(baseline, candidate, threshold_pct):
                 baseline=base_value,
                 candidate=cand_value,
                 pct=pct,
-                degraded=_is_degraded(pct, threshold_pct, _higher_is_better(item)),
+                degraded=(
+                    _is_degraded(pct, threshold_pct, _higher_is_better(suite, item))
+                    if _should_judge(suite, sub_item)
+                    else False
+                ),
             )
         )
     return Comparison(rows, _suite_level(rows, threshold_pct), excluded_suites)
@@ -127,6 +131,13 @@ def _is_degraded(pct, threshold_pct, higher_is_better=True):
 # 「越小越好」的测试项。这是一个**临时口径**：完整的方向表与配置覆盖属于 T6，
 # 尚未实现，因此这里只列出当前已接入的测试套里已知的延迟类测试项。
 _LOWER_IS_BETTER_ITEMS = ("Processor_Processes", "Context_switching_ctxsw")
+
+# 整个套都「越小越好」的测试套 —— spark 系列的值是**执行时间**（需求方 2026-10-12）。
+# 其项名（native_qN）不含任何方向线索，只能按套声明，不能靠名字猜。
+_LOWER_IS_BETTER_SUITES = ("spark", "spark_docker")
+
+# 只对指定子项判定劣化、其余子项仅展示（需求方口径：spark 只对比平均值）。
+_ONLY_JUDGE_SUB_ITEMS = {"spark": ("avg",), "spark_docker": ("avg",)}
 
 
 # 按测试套声明的**汇总口径**（需求方逐套确认，各套不同）：
@@ -182,6 +193,13 @@ _SUMMARY_RECIPES = {
     "flink_wordcount": {"group_by": "item", "combine": True, "display_scale": 1000},
     # flink_6000c：三行 read-records 求和取平均（**算术平均**，不是几何平均）。
     "flink_6000c": {"group_by": "item", "combine": True, "aggregate": "mean"},
+    # spark：汇总行取文件末尾的汇总值（解析时已 ÷3 得到单轮平均）；方向为「越小越好」。
+    "spark": {"partition": [("spark", ["汇总"], False)]},
+    # spark_docker：汇总行 = 三个 docker 汇总值的**平均**；方向为「越小越好」。
+    "spark_docker": {
+        "partition": [("spark_docker", ["汇总"], False)],
+        "aggregate": "mean",
+    },
 }
 
 
@@ -194,10 +212,25 @@ def _is_single_core(item):
     return "1core" in _squash(item)
 
 
-def _higher_is_better(item):
+def _higher_is_better(suite, item):
+    """方向按「套 + 测试项」判断。
+
+    spark 系列整个套的值都是执行时间（越小越好），项名里没有方向线索，只能按套声明；
+    其余套仍按项名里的延迟类线索判断（T6 会补完整的方向表与配置覆盖）。
+    """
+    if suite in _LOWER_IS_BETTER_SUITES:
+        return False
     if "latenc" in item.lower():
         return False
     return item not in _LOWER_IS_BETTER_ITEMS
+
+
+def _should_judge(suite, sub_item):
+    """该子项是否参与劣化判定；未声明「只判定若干子项」的套一律判定。"""
+    judged = _ONLY_JUDGE_SUB_ITEMS.get(suite)
+    if judged is None:
+        return True
+    return sub_item in judged
 
 
 def _normalized(value, higher_is_better):

@@ -9,23 +9,32 @@ import json
 import os
 import re
 
+from .spark_items import SPARK_ITEMS
+
 # 测试套 → (子目录, 文件名, 解析器)。目前接入长表族的六个基础套 + 日志正则族的 mysql_tpcc；
 # 其余套（SPEC CPU2017 CSV、场景化 JSON / 分组文本 / 裸数字列）在后续任务里逐个加入。
 # 注意 unixbench 的文件名带一个前导空格 —— 这是上游产物的真实情况，不要"顺手修掉"。
 _SUITE_FILES = {
-    "stream": ("基础性能测试", "stream.txt", None),
-    "fio": ("基础性能测试", "fio.txt", None),
-    "iozone3": ("基础性能测试", "iozone3.txt", None),
-    "lmbench3": ("基础性能测试", "lmbench3.txt", None),
-    "netperf": ("基础性能测试", "netperf.txt", None),
-    "unixbench": ("基础性能测试", " unixbench-master.txt", None),
-    "mysql_tpcc": ("场景化测试", "mysql_tpcc.txt", "tpmc_log"),
-    "nginx": ("场景化测试", "nginx.json", "nginx_json"),
-    "flink_nexmark": ("场景化测试", "flink_nexmark.json", "flink_json"),
-    "redis_docker": ("场景化测试", "redis_docker.txt", "redis_docker"),
-    "mysql_sysbench": ("场景化测试", "mysql_sysBench.txt", "mysql_sysbench"),
-    "flink_wordcount": ("场景化测试", "flink_wordcount.json", "flink_json"),
-    "flink_6000c": ("场景化测试", "flink_6000c.txt", "flink_6000c"),
+    "stream": ("基础性能测试", ("stream.txt",), None),
+    "fio": ("基础性能测试", ("fio.txt",), None),
+    "iozone3": ("基础性能测试", ("iozone3.txt",), None),
+    "lmbench3": ("基础性能测试", ("lmbench3.txt",), None),
+    "netperf": ("基础性能测试", ("netperf.txt",), None),
+    "unixbench": ("基础性能测试", (" unixbench-master.txt",), None),
+    "mysql_tpcc": ("场景化测试", ("mysql_tpcc.txt",), "tpmc_log"),
+    "nginx": ("场景化测试", ("nginx.json",), "nginx_json"),
+    "flink_nexmark": ("场景化测试", ("flink_nexmark.json",), "flink_json"),
+    "redis_docker": ("场景化测试", ("redis_docker.txt",), "redis_docker"),
+    "mysql_sysbench": ("场景化测试", ("mysql_sysBench.txt",), "mysql_sysbench"),
+    "flink_wordcount": ("场景化测试", ("flink_wordcount.json",), "flink_json"),
+    "flink_6000c": ("场景化测试", ("flink_6000c.txt",), "flink_6000c"),
+    "spark": ("场景化测试", ("spark.out",), "spark"),
+    # 一套对多文件：三个文件各代表一个 docker。
+    "spark_docker": (
+        "场景化测试",
+        ("spark_docker.out0", "spark_docker.out1", "spark_docker.out2"),
+        "spark_docker",
+    ),
 }
 
 
@@ -66,15 +75,30 @@ def load_with_report(directory):
     """
     suites = {}
     report = []
-    for suite, (sub_dir, file_name, parser_name) in sorted(_SUITE_FILES.items()):
-        path = _locate(directory, sub_dir, file_name)
-        if path is None:
+    for suite, (sub_dir, file_names, parser_name) in sorted(_SUITE_FILES.items()):
+        paths = _locate_all(directory, sub_dir, file_names)
+        if not paths:
             report.append((suite, None, 0, None))
             continue
-        parsed = _PARSERS[parser_name](path)
+        parsed = _PARSERS[parser_name](paths)
         suites[suite] = parsed
-        report.append((suite, path, sum(len(subs) for subs in parsed.values()), parsed))
+        report.append((suite, paths[0], sum(len(subs) for subs in parsed.values()), parsed))
     return ResultSet(suites), report
+
+
+def _locate_all(directory, sub_dir, file_names):
+    """定位一个测试套需要的**全部**结果文件；先试类别子目录，再试平铺。
+
+    只要有一个文件找不到就返回空 —— 缺文件的套数据不完整，比对没有意义
+    （例如 spark_docker 需要三个 docker 的文件齐全才能算平均值）。
+    """
+    paths = []
+    for file_name in file_names:
+        path = _locate(directory, sub_dir, file_name)
+        if path is None:
+            return []
+        paths.append(path)
+    return paths
 
 
 def _locate(directory, sub_dir, file_name):
@@ -207,13 +231,75 @@ def _parse_flink_6000c(path):
     return {"read-records": {str(index + 1): value for index, value in enumerate(values)}}
 
 
-# 解析器注册表。`_SUITE_FILES` 里用名字引用，避免在定义处前向引用函数。
+def _single(parser):
+    """把「只处理一个文件」的解析器适配成统一的多文件接口。"""
+
+    def adapted(paths):
+        return parser(paths[0])
+
+    return adapted
+
+
+def _read_numbers(path):
+    """读一列数字：每个非空行一个值。"""
+    with open(path, encoding="utf-8") as handle:
+        return [float(line) for line in handle if line.strip()]
+
+
+def _parse_spark(paths):
+    """`spark.out`：103 个测试项 × 3 轮 + 1 个汇总值。
+
+    取值顺序是**轮次优先**：先 103 项的轮 1，再 103 项的轮 2，再轮 3，最后 1 个汇总值。
+    汇总值是本次运行三轮的**合计**，按需求方口径 ÷3 得到单轮平均
+    （见规划文档「对比项定义 15. spark」）。
+    """
+    values = _read_numbers(paths[0])
+    count = len(SPARK_ITEMS)
+    items = {}
+    for index, name in enumerate(SPARK_ITEMS):
+        rounds = [values[index + round_index * count] for round_index in range(3)]
+        items[name] = {
+            "轮1": rounds[0],
+            "轮2": rounds[1],
+            "轮3": rounds[2],
+            "avg": sum(rounds) / len(rounds),
+        }
+    items["汇总"] = {"值": values[3 * count] / 3.0}
+    return items
+
+
+def _parse_spark_docker(paths):
+    """`spark_docker.out0/1/2`：每个文件代表一个 docker，各含 103 项 + 1 个汇总值。
+
+    每项给出三个 docker 的取值与它们的平均值（需求方口径：只对比平均值）。
+    """
+    per_docker = [_read_numbers(path) for path in paths]
+    count = len(SPARK_ITEMS)
+    items = {}
+    for index, name in enumerate(SPARK_ITEMS):
+        values = [numbers[index] for numbers in per_docker]
+        entry = {
+            "docker{0}".format(docker_index): value
+            for docker_index, value in enumerate(values)
+        }
+        entry["avg"] = sum(values) / len(values)
+        items[name] = entry
+    items["汇总"] = {
+        "docker{0}".format(docker_index): numbers[count]
+        for docker_index, numbers in enumerate(per_docker)
+    }
+    return items
+
+
+# 解析器注册表。统一接口：接收**文件路径列表**（单文件套只用一个）。
 _PARSERS = {
-    None: _parse_long_table,
-    "tpmc_log": _parse_tpmc_log,
-    "nginx_json": _parse_nginx_json,
-    "flink_json": _parse_flink_json,
-    "redis_docker": _parse_redis_docker,
-    "mysql_sysbench": _parse_mysql_sysbench,
-    "flink_6000c": _parse_flink_6000c,
+    None: _single(_parse_long_table),
+    "tpmc_log": _single(_parse_tpmc_log),
+    "nginx_json": _single(_parse_nginx_json),
+    "flink_json": _single(_parse_flink_json),
+    "redis_docker": _single(_parse_redis_docker),
+    "mysql_sysbench": _single(_parse_mysql_sysbench),
+    "flink_6000c": _single(_parse_flink_6000c),
+    "spark": _parse_spark,
+    "spark_docker": _parse_spark_docker,
 }
