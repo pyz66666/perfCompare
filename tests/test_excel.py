@@ -20,6 +20,7 @@ import pytest
 from perf_compare.compare import compare
 from perf_compare.excel import write_excel
 from perf_compare.resultdir import load
+from perf_compare.spark_items import SPARK_ITEMS
 
 FIXTURE = Path(__file__).resolve().parents[1] / "测试结果模版"
 
@@ -61,6 +62,52 @@ def _明细行(workbook, sheet):
     return [
         [cell.value for cell in row] for row in workbook[sheet].iter_rows(min_row=2)
     ]
+
+
+def test_写出对比表格_spark与spark_docker用宽表明细(tmp_path):
+    """spark 明细：一行一个测试项，各轮与平均值**横向并列**（需求方 2026-10-12）。
+
+    列结构 = 测试子项 | 结果A 的各次测量 + 平均 | 结果B 同 | 差距百分比 | 是否劣化；
+    行顺序按源文件顺序（`spark_items.py`），且**不含**「汇总」项。
+    """
+    comparison = compare(load(str(FIXTURE)), load(str(FIXTURE)), threshold_pct=5.0)
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    workbook = openpyxl.load_workbook(str(out_path))
+
+    sheet = workbook["spark"]
+    assert [cell.value for cell in sheet[1]] == [
+        "测试子项",
+        "结果A-轮1", "结果A-轮2", "结果A-轮3", "结果A-avg",
+        "结果B-轮1", "结果B-轮2", "结果B-轮3", "结果B-avg",
+        "差距百分比",
+        "是否劣化",
+    ]
+    rows = [[cell.value for cell in row] for row in sheet.iter_rows(min_row=2)]
+    assert [row[0] for row in rows] == list(SPARK_ITEMS)
+    first = rows[0]
+    assert first[1] == 33.498
+    assert first[2] == 31.663
+    assert first[3] == 30.929
+    assert first[4] == pytest.approx(32.03)
+    assert first[10] == "否"
+
+    docker_sheet = workbook["spark_docker"]
+    assert [cell.value for cell in docker_sheet[1]] == [
+        "测试子项",
+        "结果A-docker0", "结果A-docker1", "结果A-docker2", "结果A-avg",
+        "结果B-docker0", "结果B-docker1", "结果B-docker2", "结果B-avg",
+        "差距百分比",
+        "是否劣化",
+    ]
+    docker_rows = [[cell.value for cell in row] for row in docker_sheet.iter_rows(min_row=2)]
+    assert docker_rows[0][0] == "native_q1"
+    assert docker_rows[0][1] == 24.92
+    assert docker_rows[0][2] == 14.981
+    assert docker_rows[0][3] == 23.628
+    assert docker_rows[0][4] == pytest.approx(21.176333333333336)
 
 
 def test_写出对比表格_输出目录不存在时自动创建(tmp_path):

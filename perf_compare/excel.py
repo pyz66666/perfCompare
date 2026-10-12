@@ -13,11 +13,20 @@ import os
 
 import openpyxl
 
+from .spark_items import SPARK_ITEMS
+
 SUMMARY_SHEET = "汇总"
 DEGRADED_SHEET = "子项劣化汇总"
 SUMMARY_HEADER = ["测试套", "结果A", "结果B", "差距百分比", "是否劣化"]
 DEGRADED_HEADER = ["测试套", "测试子项", "结果A", "结果B", "差距百分比"]
 DETAIL_HEADER = ["测试子项", "结果A", "结果B", "差距百分比", "是否劣化"]
+
+# 宽表明细的套：一行一个测试项，各次测量**横向并列**（需求方 2026-10-12）。
+# 取值 = 该套每次测量的子项名；行序按源文件顺序（spark_items.py），且不含「汇总」项。
+_WIDE_LAYOUTS = {
+    "spark": ("轮1", "轮2", "轮3"),
+    "spark_docker": ("docker0", "docker1", "docker2"),
+}
 
 _套级口径说明 = (
     "套级值口径：套内子项按方向归一化后的几何平均（先合并再比；0 值排除）。"
@@ -64,6 +73,9 @@ def write_excel(comparison, path):
 
     for suite in suites:
         detail = workbook.create_sheet(title=suite)
+        if suite in _WIDE_LAYOUTS:
+            _write_wide_sheet(detail, suite, _WIDE_LAYOUTS[suite], rows)
+            continue
         detail.append(DETAIL_HEADER)
         for row in rows:
             if row.suite != suite:
@@ -87,6 +99,56 @@ def _确保父目录存在(path):
     parent = os.path.dirname(path)
     if parent and not os.path.isdir(parent):
         os.makedirs(parent)
+
+
+def _write_wide_sheet(sheet, suite, measurements, rows):
+    """写宽表明细：`测试子项 | 结果A 各次测量 + 平均 | 结果B 同 | 差距百分比 | 是否劣化`。
+
+    只列出源文件里真实存在的测试项（**不含「汇总」** —— 它属于汇总行），
+    并按**源文件顺序**排列（字母序会把 native_q10 排到 native_q2 前面，不可用）。
+    """
+    sheet.append(
+        ["测试子项"]
+        + ["结果A-{0}".format(name) for name in measurements]
+        + ["结果A-avg"]
+        + ["结果B-{0}".format(name) for name in measurements]
+        + ["结果B-avg"]
+        + ["差距百分比", "是否劣化"]
+    )
+
+    by_key = {
+        (row.item, row.sub_item): row for row in rows if row.suite == suite
+    }
+    present = {item for item, _ in by_key}
+
+    for item in SPARK_ITEMS:
+        if item not in present:
+            continue
+        average = by_key.get((item, "avg"))
+        sheet.append(
+            [item]
+            + [_宽表值(by_key, item, name, "baseline") for name in measurements]
+            + [_平均值字段(average, "baseline")]
+            + [_宽表值(by_key, item, name, "candidate") for name in measurements]
+            + [_平均值字段(average, "candidate")]
+            + [
+                _格式百分比(average.pct if average is not None else None),
+                "是" if average is not None and average.degraded else "否",
+            ]
+        )
+
+
+def _宽表值(by_key, item, sub_item, side):
+    row = by_key.get((item, sub_item))
+    if row is None:
+        return "缺失"
+    return _测量值(getattr(row, side))
+
+
+def _平均值字段(average, side):
+    if average is None:
+        return "缺失"
+    return _测量值(getattr(average, side))
 
 
 def _格式百分比(pct):
