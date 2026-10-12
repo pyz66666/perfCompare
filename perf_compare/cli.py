@@ -15,7 +15,7 @@ import traceback
 from .compare import compare
 from .config import load_config
 from .excel import write_excel
-from .resultdir import expected_suites, load
+from .resultdir import load_with_report
 
 LOG_FILE_NAME = "perf-compare.log"
 DEFAULT_LOG_DIR = "logs"
@@ -59,13 +59,13 @@ def _run(args):
 
     baseline_path = config.baseline.path
     candidate_path = config.candidates[0].path
-    baseline = load(baseline_path)
-    candidate = load(candidate_path)
+    baseline, baseline_report = load_with_report(baseline_path)
+    candidate, candidate_report = load_with_report(candidate_path)
 
     # 主动交代「读到什么、缺什么」—— 结果目录里缺失的套会被静默跳过，
-    # 不打印出来的话，用户无从判断是数据不全还是路径填错了。
-    _report_read(baseline_path, baseline, "基线")
-    _report_read(candidate_path, candidate, "对比")
+    # 不打印出来的话，用户无从判断是数据不全、路径填错，还是文件格式变了。
+    _report_read(baseline_path, baseline_report, "基线")
+    _report_read(candidate_path, candidate_report, "对比")
 
     comparison = compare(baseline, candidate, config.threshold_pct)
     rows = comparison.rows()
@@ -92,13 +92,23 @@ def _run(args):
     return 0
 
 
-def _report_read(path, results, label):
-    """打印某一侧读到的测试套，以及本工具认识但没找到的套。"""
-    found = sorted({suite for suite, _, _, _ in results.observations()})
-    print("{0} {1}：读到 {2} 个测试套 {3}".format(label, path, len(found), found))
-    missing = [name for name in expected_suites() if name not in found]
-    if missing:
-        print("    未找到：{0}".format(missing))
+def _report_read(directory, report, label):
+    """打印某一侧读到哪些套、哪些文件在但解析不出数据、哪些文件没找到。
+
+    区分「文件不在」与「文件在但解析不出数据」很重要：前者是没测或命名不同，
+    后者是格式变了 —— 笼统说「未找到」会让用户无法定位。
+    """
+    read = [suite for suite, _, count, _ in report if count > 0]
+    empty = [
+        os.path.basename(path) for _, path, count, _ in report if path is not None and count == 0
+    ]
+    absent = [suite for suite, path, _, _ in report if path is None]
+
+    print("{0} {1}：读到 {2} 个测试套 {3}".format(label, directory, len(read), read))
+    if empty:
+        print("    文件在、但没解析出数据（可能是格式不符）：{0}".format(empty))
+    if absent:
+        print("    未找到（未测或命名不同）：{0}".format(absent))
 
 
 def _write_error_log(log_dir, argv):

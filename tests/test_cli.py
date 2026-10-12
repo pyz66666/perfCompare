@@ -104,6 +104,32 @@ def test_命令行_一个套都没读到时报错而不是静默产出空表(tmp
     assert "结果目录" in capsys.readouterr().err
 
 
+def test_命令行_文件在但解析不出数据时单独报告(tmp_path, capsys):
+    """文件存在、但内容不符合预期格式时，不能笼统说「未找到」——
+    否则用户无法判断是文件没生成、名字不对，还是格式变了。"""
+    result_dir = tmp_path / "结果"
+    result_dir.mkdir()
+    shutil.copy(str(FIXTURE / "基础性能测试" / "fio.txt"), str(result_dir / "fio.txt"))
+    (result_dir / "mysql_tpcc.txt").write_text("格式不对的内容\n", encoding="utf-8")
+    config_path = _写配置(tmp_path, result_dir, result_dir)
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--excel",
+            str(tmp_path / "对比表格.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "mysql_tpcc.txt" in output
+    assert "没解析出数据" in output
+
+
 def test_命令行_报告读到的套与未找到的套(tmp_path, capsys):
     """数据不全时要写清「读到哪些套、没找到哪些套」，便于定位是哪一侧缺数据。"""
     baseline = tmp_path / "baseline" / "基础性能测试"

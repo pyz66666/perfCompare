@@ -9,6 +9,8 @@
 （阻塞项 O1）。确认之前一律写出 `待确认(O1)` 占位，**不自行发明算法** —— 否则一个错误的
 数字会被当成权威结论读走。
 """
+import os
+
 import openpyxl
 
 SUMMARY_SHEET = "汇总"
@@ -76,7 +78,15 @@ def write_excel(comparison, path):
                 ]
             )
 
+    _确保父目录存在(path)
     workbook.save(path)
+
+
+def _确保父目录存在(path):
+    """输出目录不存在时自动创建 —— 让用户为此失败一次是没必要的坑。"""
+    parent = os.path.dirname(path)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent)
 
 
 def _格式百分比(pct):

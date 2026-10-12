@@ -53,21 +53,28 @@ def expected_suites():
 
 
 def load(directory):
-    """读取结果目录，返回 ResultSet。
+    """读取结果目录，返回 ResultSet。"""
+    return load_with_report(directory)[0]
 
-    结果文件有两种真实存在的布局，都要支持：
 
-    - **平铺**（真实环境）：所有结果文件直接放在结果目录下，如 `<dir>/fio.txt`；
-    - **分类子目录**（样例模板）：`<dir>/基础性能测试/fio.txt`。
+def load_with_report(directory):
+    """读取结果目录，返回 `(ResultSet, 诊断信息)`，只解析一次。
 
-    每个套先按类别子目录找，再按平铺找；都找不到就跳过该套（不报错）。
+    诊断信息是 `[(套名, 找到的文件路径或 None, 解析出的测量值条数, 该套的解析结果)]`，
+    用于向用户说清「哪个套读到了、哪个文件在但格式不符、哪个文件根本没有」。
+    区分后两者很重要：笼统说「未找到」会让用户无法判断是文件没生成还是格式变了。
     """
     suites = {}
-    for suite, (sub_dir, file_name, parser_name) in _SUITE_FILES.items():
+    report = []
+    for suite, (sub_dir, file_name, parser_name) in sorted(_SUITE_FILES.items()):
         path = _locate(directory, sub_dir, file_name)
-        if path is not None:
-            suites[suite] = _PARSERS[parser_name](path)
-    return ResultSet(suites)
+        if path is None:
+            report.append((suite, None, 0, None))
+            continue
+        parsed = _PARSERS[parser_name](path)
+        suites[suite] = parsed
+        report.append((suite, path, sum(len(subs) for subs in parsed.values()), parsed))
+    return ResultSet(suites), report
 
 
 def _locate(directory, sub_dir, file_name):

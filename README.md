@@ -12,8 +12,7 @@
 # 1. 准备配置文件（仓库自带可直接运行的示例，复制后改路径）
 cp compare.example.json compare.json
 
-# 2. 在项目目录下执行（输出目录需先存在）
-mkdir -p out
+# 2. 在项目目录下执行（输出目录会自动创建）
 python3 -m perf_compare --config compare.json --excel out/对比表格.xlsx
 ```
 

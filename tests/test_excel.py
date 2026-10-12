@@ -63,6 +63,21 @@ def _明细行(workbook, sheet):
     ]
 
 
+def test_写出对比表格_输出目录不存在时自动创建(tmp_path):
+    """输出目录不存在就直接失败，是个不必要的坑 —— 应当自动建目录。"""
+    _两侧样例(tmp_path)
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "还不存在" / "更深一层" / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    assert out_path.is_file()
+
+
 def test_写出对比表格_flink_wordcount的单位换算写成公式(tmp_path):
     """需求方要求 ÷1000 在 Excel 里**以公式呈现、保留原值**（决策 D19）。
 
