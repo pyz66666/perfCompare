@@ -17,9 +17,9 @@ from .spark_items import SPARK_ITEMS
 
 SUMMARY_SHEET = "汇总"
 DEGRADED_SHEET = "子项劣化汇总"
-SUMMARY_HEADER = ["测试套", "结果A", "结果B", "差距百分比", "是否劣化"]
-DEGRADED_HEADER = ["测试套", "测试子项", "结果A", "结果B", "差距百分比"]
-DETAIL_HEADER = ["测试子项", "结果A", "结果B", "差距百分比", "是否劣化"]
+
+# 表头里的两侧名称默认值；可通过配置里的 `name` 指定（如系统名）——需求方 2026-10-12。
+DEFAULT_LABELS = ("结果A", "结果B")
 
 # 宽表明细的套：一行一个测试项，各次测量**横向并列**（需求方 2026-10-12）。
 # 取值 = 该套每次测量的子项名；行序按源文件顺序（spark_items.py），且不含「汇总」项。
@@ -29,21 +29,22 @@ _WIDE_LAYOUTS = {
 }
 
 _套级口径说明 = (
-    "套级值口径：套内子项按方向归一化后的几何平均（先合并再比；0 值排除）。"
-    "【注意：套级算法未确认（O1），属临时口径，勿据此下结论】"
+    "套级值口径按测试套声明（见规划文档「对比项定义」）：多数为组内子项的几何平均，"
+    "unixbench 取工具自带的 Index_Score，spark 系列为执行时间的平均值。"
 )
 
 
-def write_excel(comparison, path):
-    """把一次比对写成 xlsx。"""
+def write_excel(comparison, path, labels=DEFAULT_LABELS):
+    """把一次比对写成 xlsx。`labels` 是两侧结果目录的显示名（表头用）。"""
     rows = comparison.rows()
     suites = _suites_in_order(rows)
+    labels = tuple(labels)
 
     workbook = openpyxl.Workbook()
 
     summary = workbook.active
     summary.title = SUMMARY_SHEET
-    summary.append(SUMMARY_HEADER)
+    summary.append(["测试套", labels[0], labels[1], "差距百分比", "是否劣化"])
     for suite_row in comparison.suite_rows():
         summary.append(
             [
@@ -57,7 +58,9 @@ def write_excel(comparison, path):
     summary.cell(row=1, column=6, value=_套级口径说明)
 
     degraded_sheet = workbook.create_sheet(title=DEGRADED_SHEET)
-    degraded_sheet.append(DEGRADED_HEADER)
+    degraded_sheet.append(
+        ["测试套", "测试子项", labels[0], labels[1], "差距百分比"]
+    )
     for row in rows:
         if not row.degraded:
             continue
@@ -74,9 +77,9 @@ def write_excel(comparison, path):
     for suite in suites:
         detail = workbook.create_sheet(title=suite)
         if suite in _WIDE_LAYOUTS:
-            _write_wide_sheet(detail, suite, _WIDE_LAYOUTS[suite], rows)
+            _write_wide_sheet(detail, suite, _WIDE_LAYOUTS[suite], rows, labels)
             continue
-        detail.append(DETAIL_HEADER)
+        detail.append(["测试子项", labels[0], labels[1], "差距百分比", "是否劣化"])
         for row in rows:
             if row.suite != suite:
                 continue
@@ -101,7 +104,7 @@ def _确保父目录存在(path):
         os.makedirs(parent)
 
 
-def _write_wide_sheet(sheet, suite, measurements, rows):
+def _write_wide_sheet(sheet, suite, measurements, rows, labels):
     """写宽表明细：`测试子项 | 结果A 各次测量 + 平均 | 结果B 同 | 差距百分比 | 是否劣化`。
 
     只列出源文件里真实存在的测试项（**不含「汇总」** —— 它属于汇总行），
@@ -109,10 +112,10 @@ def _write_wide_sheet(sheet, suite, measurements, rows):
     """
     sheet.append(
         ["测试子项"]
-        + ["结果A-{0}".format(name) for name in measurements]
-        + ["结果A-avg"]
-        + ["结果B-{0}".format(name) for name in measurements]
-        + ["结果B-avg"]
+        + ["{0}-{1}".format(labels[0], name) for name in measurements]
+        + ["{0}-avg".format(labels[0])]
+        + ["{0}-{1}".format(labels[1], name) for name in measurements]
+        + ["{0}-avg".format(labels[1])]
         + ["差距百分比", "是否劣化"]
     )
 

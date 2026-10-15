@@ -6,6 +6,8 @@ import json
 import shutil
 from pathlib import Path
 
+import openpyxl
+
 from perf_compare.cli import main
 
 FIXTURE = Path(__file__).resolve().parents[1] / "测试结果模版"
@@ -128,6 +130,57 @@ def test_命令行_文件在但解析不出数据时单独报告(tmp_path, capsy
     assert exit_code == 0
     assert "mysql_tpcc.txt" in output
     assert "没解析出数据" in output
+
+
+def test_命令行_表头名称来自配置(tmp_path):
+    """两侧名称支持在配置里指定（需求方 2026-10-12）。
+
+    注意：断言用的名称**不能出现在测试函数名里** —— pytest 会用函数名创建 tmp_path，
+    而 CLI 会把路径打印出来，否则子串断言会被目录名意外满足（假通过）。
+    """
+    for side in ("b", "c"):
+        target = tmp_path / side / "基础性能测试"
+        target.mkdir(parents=True)
+        shutil.copy(str(FIXTURE / "基础性能测试" / "fio.txt"), str(target / "fio.txt"))
+
+    config_path = tmp_path / "compare.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "baseline": {"path": str(tmp_path / "b"), "name": "openEuler-24.03-64K"},
+                "candidates": [
+                    {"path": str(tmp_path / "c"), "name": "openEuler-24.03-SP1-64K"}
+                ],
+                "threshold_pct": 5.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    excel_path = tmp_path / "对比表格.xlsx"
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--excel",
+            str(excel_path),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    assert exit_code == 0
+    workbook = openpyxl.load_workbook(str(excel_path))
+    assert [cell.value for cell in workbook["汇总"][1]][:3] == [
+        "测试套",
+        "openEuler-24.03-64K",
+        "openEuler-24.03-SP1-64K",
+    ]
+    assert [cell.value for cell in workbook["fio"][1]][:3] == [
+        "测试子项",
+        "openEuler-24.03-64K",
+        "openEuler-24.03-SP1-64K",
+    ]
 
 
 def test_命令行_报告被排除的测试套(tmp_path, capsys):

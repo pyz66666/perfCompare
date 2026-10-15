@@ -64,6 +64,53 @@ def _明细行(workbook, sheet):
     ]
 
 
+def test_写出对比表格_表头名称可配置(tmp_path):
+    """需求方要求：表头默认是「结果A／结果B」，但名称要能指定（如系统名）。"""
+    _两侧样例(tmp_path)
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path), labels=("openEuler-24.03", "openEuler-24.03-SP1"))
+
+    workbook = openpyxl.load_workbook(str(out_path))
+    assert [cell.value for cell in workbook["汇总"][1]][:3] == [
+        "测试套",
+        "openEuler-24.03",
+        "openEuler-24.03-SP1",
+    ]
+    assert [cell.value for cell in workbook["fio"][1]][:3] == [
+        "测试子项",
+        "openEuler-24.03",
+        "openEuler-24.03-SP1",
+    ]
+    assert [cell.value for cell in workbook["子项劣化汇总"][1]][:4] == [
+        "测试套",
+        "测试子项",
+        "openEuler-24.03",
+        "openEuler-24.03-SP1",
+    ]
+
+
+def test_写出对比表格_表头名称的默认值仍是结果A与结果B(tmp_path):
+    """不配置名称时必须保持原样，避免影响既有用法。"""
+    _两侧样例(tmp_path)
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    workbook = openpyxl.load_workbook(str(out_path))
+    assert [cell.value for cell in workbook["汇总"][1]][:3] == ["测试套", "结果A", "结果B"]
+
+
 def test_写出对比表格_spark与spark_docker用宽表明细(tmp_path):
     """spark 明细：一行一个测试项，各轮与平均值**横向并列**（需求方 2026-10-12）。
 
@@ -251,8 +298,8 @@ def test_写出对比表格_汇总表的套级唯一值取子项几何平均(tmp
     assert stream_row[2] == pytest.approx(100.0, rel=1e-12)
     assert stream_row[3] == pytest.approx(-50.0, rel=1e-9)
     assert stream_row[4] == "是"
-    # 算法未经需求方确认，必须在表里显著标注，不能被当成权威数字读走。
-    assert "未确认" in str(summary["F1"].value)
+    # 汇总表要说明套级值的口径来源（各套口径不同，且已逐套确认）。
+    assert "口径按测试套声明" in str(summary["F1"].value)
 
 
 def test_写出对比表格_套级几何平均不会因数值过大而溢出(tmp_path):

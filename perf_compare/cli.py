@@ -87,7 +87,7 @@ def _run(args):
             "只在一侧出现、未纳入对比的测试套：{0}（只比对两侧都包含的套）".format(excluded)
         )
 
-    write_excel(comparison, args.excel)
+    write_excel(comparison, args.excel, _显示名(config))
     print(
         "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(
             args.excel,
@@ -97,6 +97,14 @@ def _run(args):
         )
     )
     return 0
+
+
+def _显示名(config):
+    """表头用的两侧名称；配置里没写就用「结果A／结果B」（需求方 2026-10-12）。"""
+    return (
+        config.baseline.name or "结果A",
+        config.candidates[0].name or "结果B",
+    )
 
 
 def _report_read(directory, report, label):

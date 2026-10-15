@@ -18,6 +18,8 @@ class ResultDir:
 
     path: str
     kernel_version: Optional[str] = None
+    # 显示名：用于表格表头（如系统名）。未配置时回退为「结果A／结果B」。
+    name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -41,4 +43,8 @@ def load_config(path):
 
 
 def _result_dir(node):
-    return ResultDir(path=node["path"], kernel_version=node.get("kernel_version"))
+    return ResultDir(
+        path=node["path"],
+        kernel_version=node.get("kernel_version"),
+        name=node.get("name"),
+    )

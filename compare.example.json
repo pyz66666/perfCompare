@@ -1,11 +1,13 @@
 {
   "baseline": {
     "path": "测试结果模版",
+    "name": "基线版本",
     "kernel_version": "6.6.0-72.3.0"
   },
   "candidates": [
     {
       "path": "测试结果模版",
+      "name": "对比版本",
       "kernel_version": "6.6.0-72.3.0"
     }
   ],
