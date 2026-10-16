@@ -1,20 +1,23 @@
 """对比表格输出。
 
-工作簿布局（需求方 2026-10-05 修正）：
-- 「汇总」        —— **套级唯一值**的对比（不是劣化项计数）
-- 「子项劣化汇总」  —— 跨套列出被判定劣化的子项
-- 每个测试套一个 sheet —— 该套全部子项的明细
+工作簿布局：
+- 「说明」          —— 首个 sheet：两侧版本、阈值、判定口径、颜色图例、工作表说明
+- 「汇总」          —— **套级唯一值**的对比，按类别分组，套名超链接到该套明细
+- 「子项劣化汇总」   —— 跨套列出被判定劣化的子项，**按严重度倒序**
+- 每个测试套一个 sheet —— 该套全部子项的明细（spark 系列为宽表）
 
-「汇总」里的套级唯一值需要一个「把套内多个子项归并成单个值」的算法，该算法尚未确定
-（阻塞项 O1）。确认之前一律写出 `待确认(O1)` 占位，**不自行发明算法** —— 否则一个错误的
-数字会被当成权威结论读走。
+**美化只改显示，不改数值**：数字格式与条件格式只影响呈现，单元格里仍是精确原值。
 """
 import os
 
 import openpyxl
+from openpyxl.formatting.rule import DataBarRule
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from .spark_items import SPARK_ITEMS
 
+NOTES_SHEET = "说明"
 SUMMARY_SHEET = "汇总"
 DEGRADED_SHEET = "子项劣化汇总"
 
@@ -28,84 +31,183 @@ _WIDE_LAYOUTS = {
     "spark_docker": ("docker0", "docker1", "docker2"),
 }
 
+# 汇总表的类别分组（需求方 2026-10-16）：按此顺序输出，未列出的套归入「其它」。
+_CATEGORIES = (
+    (
+        "基础性能测试",
+        (
+            "stream", "fio", "iozone3", "lmbench3", "netperf", "unixbench",
+            "speccpu2017_int_single", "speccpu2017_int_max",
+            "speccpu2017_fp_single", "speccpu2017_fp_max",
+        ),
+    ),
+    (
+        "场景化测试",
+        (
+            "nginx", "flink_nexmark", "flink_wordcount", "flink_6000c",
+            "mysql_sysbench", "mysql_tpcc", "redis_docker", "spark", "spark_docker",
+        ),
+    ),
+)
+_OTHER_CATEGORY = "其它"
+
 _套级口径说明 = (
     "套级值口径按测试套声明（见规划文档「对比项定义」）：多数为组内子项的几何平均，"
     "unixbench 取工具自带的 Index_Score，spark 系列为执行时间的平均值。"
 )
 
+# 样式。深色底白字表头 + 劣化/改善底色，均为“只改显示”。
+_表头字体 = Font(bold=True, color="FFFFFF")
+_表头填充 = PatternFill("solid", fgColor="1F4E79")
+_类别字体 = Font(bold=True, color="1F4E79")
+_类别填充 = PatternFill("solid", fgColor="DDEBF7")
+_劣化填充 = PatternFill("solid", fgColor="FFC7CE")
+_劣化字体 = Font(bold=True, color="9C0006")
+_改善填充 = PatternFill("solid", fgColor="C6EFCE")
+_链接字体 = Font(color="0563C1", underline="single")
+# 差距百分比：带正负号与 % 单位；数值本身不动。
+_百分比格式 = '+0.00"%";-0.00"%";0.00"%"'
 
-def write_excel(comparison, path, labels=DEFAULT_LABELS):
-    """把一次比对写成 xlsx。`labels` 是两侧结果目录的显示名（表头用）。"""
+
+def write_excel(comparison, path, labels=DEFAULT_LABELS, info=None):
+    """把一次比对写成 xlsx。
+
+    `labels` 是两侧结果目录的显示名；`info` 是给「说明」页用的上下文
+    （`baseline_path` / `candidate_path` / `threshold_pct` / `excluded_suites`）。
+    """
     rows = comparison.rows()
-    suites = _suites_in_order(rows)
     labels = tuple(labels)
+    info = dict(info or {})
 
     workbook = openpyxl.Workbook()
 
-    summary = workbook.active
-    summary.title = SUMMARY_SHEET
-    summary.append(["测试套", labels[0], labels[1], "差距百分比", "是否劣化"])
-    for suite_row in comparison.suite_rows():
-        summary.append(
-            [
-                suite_row.label,
-                _显示值(suite_row.baseline_expr, suite_row.baseline),
-                _显示值(suite_row.candidate_expr, suite_row.candidate),
-                _格式百分比(suite_row.pct),
-                "是" if suite_row.degraded else "否",
-            ]
-        )
-    summary.cell(row=1, column=6, value=_套级口径说明)
+    notes = workbook.active
+    notes.title = NOTES_SHEET
+    _写说明页(notes, labels, info)
 
-    degraded_sheet = workbook.create_sheet(title=DEGRADED_SHEET)
-    degraded_sheet.append(
-        ["测试套", "测试子项", labels[0], labels[1], "差距百分比"]
-    )
-    for row in rows:
-        if not row.degraded:
-            continue
-        degraded_sheet.append(
-            [
-                row.suite,
-                _标签(row),
-                row.baseline,
-                row.candidate,
-                _格式百分比(row.pct),
-            ]
-        )
+    _写汇总表(workbook.create_sheet(title=SUMMARY_SHEET), comparison, labels)
 
-    for suite in suites:
+    _写劣化汇总(workbook.create_sheet(title=DEGRADED_SHEET), comparison, labels)
+
+    for suite in _suites_in_order(rows):
         detail = workbook.create_sheet(title=suite)
         if suite in _WIDE_LAYOUTS:
-            _write_wide_sheet(detail, suite, _WIDE_LAYOUTS[suite], rows, labels)
-            continue
-        detail.append(["测试子项", labels[0], labels[1], "差距百分比", "是否劣化"])
-        for row in rows:
-            if row.suite != suite:
-                continue
-            detail.append(
-                [
-                    _标签(row),
-                    _测量值(row.baseline),
-                    _测量值(row.candidate),
-                    _格式百分比(row.pct),
-                    "是" if row.degraded else "否",
-                ]
-            )
+            _写宽表明细(detail, suite, _WIDE_LAYOUTS[suite], rows, labels)
+        else:
+            _写明细表(detail, suite, rows, labels)
+        _修饰表(detail, wide=suite in _WIDE_LAYOUTS)
+
+    _修饰表(notes, wide=False)
+    _修饰表(workbook[SUMMARY_SHEET], wide=False)
+    _修饰表(workbook[DEGRADED_SHEET], wide=False)
 
     _确保父目录存在(path)
     workbook.save(path)
 
 
-def _确保父目录存在(path):
-    """输出目录不存在时自动创建 —— 让用户为此失败一次是没必要的坑。"""
-    parent = os.path.dirname(path)
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent)
+def _写说明页(sheet, labels, info):
+    """首个 sheet：让人拿到表就知道这是什么比对、怎么判的、颜色什么意思。"""
+    threshold = info.get("threshold_pct")
+    lines = [
+        ("性能测试结果对比", None),
+        ("", None),
+        ("【对比的两个版本】", None),
+        ("{0}（基线）".format(labels[0]), info.get("baseline_path")),
+        ("{0}（对比）".format(labels[1]), info.get("candidate_path")),
+        ("", None),
+        ("【判定口径】", None),
+        ("劣化阈值", "{0}%（严格大于该值才算劣化，等于不算）".format(threshold)),
+        ("指标方向", "带宽／IOPS／吞吐越大越好；时延／耗时越小越好（按套与测试项声明）"),
+        ("套级比对", "只比对两侧都包含的测试套；只在一侧出现的套不参与对比"),
+        ("结论层级", "汇总给总体印象，子项劣化汇总给具体问题（套级归并存在稀释效应）"),
+        ("套级值口径", _套级口径说明),
+        ("", None),
+        ("【颜色图例】", None),
+        ("浅红底", "劣化（差距百分比为往变差方向、且超过阈值）"),
+        ("浅绿底", "改善（往变好的方向变化）"),
+        ("差距百分比列", "带正负号与 % 单位；条件格式数据条用于快速看幅度"),
+        ("", None),
+        ("【工作表】", None),
+        ("{0}".format(SUMMARY_SHEET), "套级唯一值对比，按类别分组；套名可点击跳到该套明细"),
+        ("{0}".format(DEGRADED_SHEET), "跨套列出被判定劣化的子项，按严重度从高到低"),
+        ("每套一个明细表", "该套全部子项的明细；spark 系列为宽表（各轮／各 docker 并列 + 平均值）"),
+    ]
+    excluded = info.get("excluded_suites") or []
+    if excluded:
+        lines.append(("只在一侧出现、未参与对比", "、".join(excluded)))
+
+    for title, value in lines:
+        sheet.append([title, value])
+
+    sheet["A1"].font = Font(bold=True, size=14)
+    for row_index, (title, value) in enumerate(lines, start=1):
+        if title.startswith("【"):
+            sheet.cell(row=row_index, column=1).font = _类别字体
 
 
-def _write_wide_sheet(sheet, suite, measurements, rows, labels):
-    """写宽表明细：`测试子项 | 结果A 各次测量 + 平均 | 结果B 同 | 差距百分比 | 是否劣化`。
+def _写汇总表(sheet, comparison, labels):
+    """套级对比，按类别分组；套名超链接到该套明细表。"""
+    sheet.append(["测试套", labels[0], labels[1], "差距百分比", "是否劣化"])
+
+    suite_rows = comparison.suite_rows()
+    for category, members in _类别(suite_rows):
+        sheet.append([category, None, None, None, None])
+        sheet.cell(row=sheet.max_row, column=1).font = _类别字体
+        for cell in sheet[sheet.max_row]:
+            cell.fill = _类别填充
+        for suite_row in suite_rows:
+            if _类别名(suite_row.suite) != category:
+                continue
+            sheet.append(
+                [
+                    suite_row.label,
+                    _显示值(suite_row.baseline_expr, suite_row.baseline),
+                    _显示值(suite_row.candidate_expr, suite_row.candidate),
+                    _格式百分比(suite_row.pct),
+                    "是" if suite_row.degraded else "否",
+                ]
+            )
+            _上色(sheet, sheet.max_row, sheet.max_row, 4, suite_row)
+            _加超链接(sheet.cell(row=sheet.max_row, column=1), suite_row.suite)
+
+
+def _写劣化汇总(sheet, comparison, labels):
+    """跨套的劣化子项，**按严重度倒序**（最严重在最上面）。"""
+    sheet.append(["测试套", "测试子项", labels[0], labels[1], "差距百分比"])
+    degraded = [row for row in comparison.rows() if row.degraded]
+    degraded.sort(key=_严重度, reverse=True)
+    for row in degraded:
+        sheet.append(
+            [
+                row.suite,
+                _标签(row),
+                _测量值(row.baseline),
+                _测量值(row.candidate),
+                _格式百分比(row.pct),
+            ]
+        )
+        _上色(sheet, sheet.max_row, sheet.max_row, 5, row)
+
+
+def _写明细表(sheet, suite, rows, labels):
+    sheet.append(["测试子项", labels[0], labels[1], "差距百分比", "是否劣化"])
+    for row in rows:
+        if row.suite != suite:
+            continue
+        sheet.append(
+            [
+                _标签(row),
+                _测量值(row.baseline),
+                _测量值(row.candidate),
+                _格式百分比(row.pct),
+                "是" if row.degraded else "否",
+            ]
+        )
+        _上色(sheet, sheet.max_row, sheet.max_row, 4, row)
+
+
+def _写宽表明细(sheet, suite, measurements, rows, labels):
+    """宽表：`测试子项 | 结果A 各次测量 + 平均 | 结果B 同 | 差距百分比 | 是否劣化`。
 
     只列出源文件里真实存在的测试项（**不含「汇总」** —— 它属于汇总行），
     并按**源文件顺序**排列（字母序会把 native_q10 排到 native_q2 前面，不可用）。
@@ -118,10 +220,9 @@ def _write_wide_sheet(sheet, suite, measurements, rows, labels):
         + ["{0}-avg".format(labels[1])]
         + ["差距百分比", "是否劣化"]
     )
+    pct_column = len(measurements) * 2 + 3
 
-    by_key = {
-        (row.item, row.sub_item): row for row in rows if row.suite == suite
-    }
+    by_key = {(row.item, row.sub_item): row for row in rows if row.suite == suite}
     present = {item for item, _ in by_key}
 
     for item in SPARK_ITEMS:
@@ -139,6 +240,113 @@ def _write_wide_sheet(sheet, suite, measurements, rows, labels):
                 "是" if average is not None and average.degraded else "否",
             ]
         )
+        if average is not None:
+            _上色(sheet, sheet.max_row, sheet.max_row, pct_column, average)
+
+
+def _上色(sheet, row_index, pct_row, pct_column, row):
+    """劣化行标红、改善行标绿；百分比列用带符号百分号格式（不改数值）。"""
+    pct_cell = sheet.cell(row=pct_row, column=pct_column)
+    pct_cell.number_format = _百分比格式
+    if row.degraded:
+        for cell in sheet[row_index]:
+            cell.fill = _劣化填充
+        pct_cell.font = _劣化字体
+    elif _是否改善(row):
+        for cell in sheet[row_index]:
+            cell.fill = _改善填充
+
+
+def _是否改善(row):
+    """差距是往“变好”的方向（且非零）。"""
+    if row.pct is None or row.pct == 0 or row.higher_is_better is None:
+        return False
+    return row.pct > 0 if row.higher_is_better else row.pct < 0
+
+
+def _严重度(row):
+    """劣化的严重程度：往变差方向的幅度（越大越严重）。"""
+    if row.pct is None:
+        return 0.0
+    return -row.pct if row.higher_is_better else row.pct
+
+
+def _修饰表(sheet, wide=False):
+    """表头样式、冻结首行（宽表再冻结首列）、自动筛选、列宽。"""
+    last_column = max(sheet.max_column, 1)
+    for cell in sheet[1][:last_column]:
+        cell.font = _表头字体
+        cell.fill = _表头填充
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    sheet.freeze_panes = "B2" if wide else "A2"
+    sheet.auto_filter.ref = "A1:{0}{1}".format(get_column_letter(last_column), sheet.max_row)
+    for index in range(1, last_column + 1):
+        sheet.column_dimensions[get_column_letter(index)].width = _列宽(sheet, index)
+    _加数据条(sheet, last_column)
+
+
+def _加数据条(sheet, last_column):
+    """给「差距百分比」列加数据条，便于一眼看幅度。"""
+    column = _百分比列(sheet, last_column)
+    if column is None or sheet.max_row < 2:
+        return
+    letter = get_column_letter(column)
+    sheet.conditional_formatting.add(
+        "{0}2:{0}{1}".format(letter, sheet.max_row),
+        DataBarRule(start_type="num", start_value=-100, end_type="num", end_value=100,
+                    color="638EC6"),
+    )
+
+
+def _百分比列(sheet, last_column):
+    for index in range(1, last_column + 1):
+        if sheet.cell(row=1, column=index).value == "差距百分比":
+            return index
+    return None
+
+
+def _列宽(sheet, index):
+    """按该列最长内容估算列宽（第一列留给较长的测试子项名）。"""
+    longest = 0
+    for row in sheet.iter_rows(min_col=index, max_col=index):
+        value = row[0].value
+        if value is None:
+            continue
+        longest = max(longest, len(str(value)))
+    if index == 1:
+        return min(max(longest + 2, 14), 48)
+    return min(max(longest + 2, 10), 22)
+
+
+def _加超链接(cell, suite):
+    cell.hyperlink = "#'{0}'!A1".format(suite)
+    cell.font = _链接字体
+
+
+def _类别(suite_rows):
+    """按声明顺序给出 (类别名, 该类别下的套名集合)，并把未列出的套归入「其它」。"""
+    present = [row.suite for row in suite_rows]
+    result = []
+    for category, members in _CATEGORIES:
+        if any(suite in members for suite in present):
+            result.append((category, members))
+    if any(_类别名(suite) == _OTHER_CATEGORY for suite in present):
+        result.append((_OTHER_CATEGORY, ()))
+    return result
+
+
+def _类别名(suite):
+    for category, members in _CATEGORIES:
+        if suite in members:
+            return category
+    return _OTHER_CATEGORY
+
+
+def _确保父目录存在(path):
+    """输出目录不存在时自动创建 —— 让用户为此失败一次是没必要的坑。"""
+    parent = os.path.dirname(path)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent)
 
 
 def _宽表值(by_key, item, sub_item, side):

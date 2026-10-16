@@ -21,6 +21,8 @@ class Row:
     candidate: Optional[float]
     pct: Optional[float]
     degraded: bool
+    # 该指标「越大越好」为 True。表格用它区分「劣化（红）」与「改善（绿）」。
+    higher_is_better: Optional[bool] = True
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class SuiteRow:
     # 需要单位换算的行，按需求方要求以 Excel 公式呈现、保留原值（决策 D19）。
     baseline_expr: Optional[str] = None
     candidate_expr: Optional[str] = None
+    higher_is_better: Optional[bool] = True
 
 
 class Comparison:
@@ -107,6 +110,7 @@ def compare(baseline, candidate, threshold_pct):
                     if _should_judge(suite, sub_item)
                     else False
                 ),
+                higher_is_better=_higher_is_better(suite, item),
             )
         )
     return Comparison(rows, _suite_level(rows, threshold_pct), excluded_suites)
@@ -450,6 +454,7 @@ def _row_from_values(
         degraded=_is_degraded(pct, threshold_pct, higher_is_better),
         baseline_expr=_scale_expr(base_value, display_scale),
         candidate_expr=_scale_expr(cand_value, display_scale),
+        higher_is_better=higher_is_better,
     )
 
 

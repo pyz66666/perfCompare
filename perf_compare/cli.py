@@ -87,7 +87,17 @@ def _run(args):
             "只在一侧出现、未纳入对比的测试套：{0}（只比对两侧都包含的套）".format(excluded)
         )
 
-    write_excel(comparison, args.excel, _显示名(config))
+    write_excel(
+        comparison,
+        args.excel,
+        _显示名(config),
+        {
+            "baseline_path": baseline_path,
+            "candidate_path": candidate_path,
+            "threshold_pct": config.threshold_pct,
+            "excluded_suites": excluded,
+        },
+    )
     print(
         "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(
             args.excel,

@@ -4,7 +4,15 @@
 
 ## 怎么跑
 
-尚未实现。计划见 `docs/plans/active/`。
+已可用。见 `使用指南.md`（配置字段、三种运行方式、输出位置、报错日志排查）。要点：
+
+```bash
+cp compare.example.json compare.json    # 改里面的 path
+python3 -m perf_compare --config compare.json --excel out/对比表格.xlsx
+```
+
+必须在项目目录下运行（否则 `No module named perf_compare`）；也可 `pip install .` 后用 `perf-compare` 命令。
+验证：`python3 -m pytest -q`（改任何解析器或输出格式后都必须跑）。
 
 ## 技术栈与硬约束
 
@@ -21,8 +29,24 @@
 - **真实测试结果数据不入库**（内网产出），只入库样例模版。
 - 报告与表格是生成物，不入库（见 `.gitignore`）。
 
+## 输出表格（xlsx）的约定
+
+交付给别人看的表格要保证**数据正确 + 一眼能读懂**。已确立的约定（需求方 2026-10-16）：
+
+- **美化只改"显示"，不改"数值"**：用 Excel 数字格式与条件格式，单元格里仍是精确原值。
+- **表头**：加粗、深色底白字；冻结首行（宽表再冻结首列）；开启自动筛选；列宽按内容估算。
+- **劣化一目了然**：劣化行标红（底色 + 差距列红字加粗），改善行标绿；差距百分比带正负号与 `%`。
+- **「子项劣化汇总」按严重度倒序**（最严重在最上面），不是按字母序。
+- **首个 sheet 是「说明」**：写明两侧版本与路径、阈值、判定口径、颜色图例、各 sheet 含义。
+- **汇总表按类别分组**（基础性能测试 / 场景化测试），套名做超链接跳到该套明细。
+- 改任何一处输出格式后，**必须跑 `python3 -m pytest -q` 确认全绿**（见根 `AGENTS.md` 第 3 条第 6 点）。
+
 ## 当前状态与下一步
 
-- 阶段：caesar 的 Clarify 已完成，正在做 Architect 与 Elaborate。
-- 阻塞：**套级汇总（几何平均）算法**待需求方回公司核对代码后确认。
-- 非目标（首版）：`spark`、`spark_docker` 两个测试套（裸数字列缺少测试项名单）。
+- **已接入 19 个测试套**：基础性能（stream/fio/iozone3/lmbench3/netperf/unixbench + speccpu2017 四套）、
+  场景化（nginx/flink_nexmark/flink_wordcount/flink_6000c/mysql_sysbench/mysql_tpcc/redis_docker/spark/spark_docker）。
+  各套汇总口径**逐套不同**，在 `compare.py` 的 `_SUMMARY_RECIPES` 按套声明；口径定义见规划文档「对比项定义」。
+- **Excel 交付物已完成**（含美化：说明首页、表头样式、冻结筛选、劣化标红、严重度倒序、类别分组与超链接）。
+- **未完成**：① HTML 测试报告 + LLM 提示词（需求方原始需求里的第二份交付物）；
+  ② 内核 commitId 查询与缓存（方案已实测可行，见 ADR-0002）；③ 多对比版本（O8）。
+- **待需求方确认**：`redis_docker` 的 set/get 是自算四个 docker 还是取文件 `geom` 列（当前按自算）。

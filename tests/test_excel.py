@@ -111,6 +111,79 @@ def test_写出对比表格_表头名称的默认值仍是结果A与结果B(tmp_
     assert [cell.value for cell in workbook["汇总"][1]][:3] == ["测试套", "结果A", "结果B"]
 
 
+def test_写出对比表格_说明首页与表格美化(tmp_path):
+    """必做美化项（需求方 2026-10-16）：
+
+    说明首页、表头样式、冻结首行、自动筛选、列宽、劣化标红、差距带符号百分号、
+    劣化汇总按严重度倒序、汇总表类别分组与套名超链接。
+    """
+    _两侧样例(tmp_path)
+    fio = tmp_path / "candidate" / "基础性能测试" / "fio.txt"
+    _扰动(fio, "read_iops_blocksize", "blocksize-4k", 0.80)    # 劣化 20%
+    _扰动(fio, "read_iops_blocksize", "blocksize-16k", 0.85)   # 劣化 15%
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(
+        comparison,
+        str(out_path),
+        labels=("基线版本X", "对比版本Y"),
+        info={
+            "baseline_path": "/data/base",
+            "candidate_path": "/data/cand",
+            "threshold_pct": 5.0,
+        },
+    )
+    workbook = openpyxl.load_workbook(str(out_path))
+
+    # 说明首页：两侧名称、路径、阈值都在
+    assert workbook.sheetnames[0] == "说明"
+    notes_text = " ".join(
+        str(cell.value)
+        for row in workbook["说明"].iter_rows()
+        for cell in row
+        if cell.value is not None
+    )
+    assert "基线版本X" in notes_text
+    assert "/data/base" in notes_text
+    assert "5.0%" in notes_text
+
+    # 表头样式 + 冻结 + 筛选 + 列宽
+    summary = workbook["汇总"]
+    header = summary.cell(row=1, column=1)
+    assert header.font.bold is True
+    assert str(header.fill.fgColor.rgb).endswith("1F4E79")
+    assert summary.freeze_panes == "A2"
+    assert summary.auto_filter.ref is not None
+    assert summary.column_dimensions["A"].width >= 14
+
+    # 汇总表按类别分组 + 套名超链接
+    summary_labels = [row[0] for row in _明细行(workbook, "汇总")]
+    assert summary_labels[0] == "基础性能测试"
+    assert "fio" in summary_labels
+    fio_cells = [
+        cell for row in summary.iter_rows() for cell in row if cell.value == "fio"
+    ]
+    assert fio_cells[0].hyperlink is not None
+
+    # 明细表：劣化行标红、差距列带符号百分号
+    detail = workbook["fio"]
+    detail_rows = [row for row in detail.iter_rows(min_row=2)]
+    degraded = [row for row in detail_rows if row[4].value == "是"]
+    assert len(degraded) == 2
+    assert str(degraded[0][0].fill.fgColor.rgb).endswith("FFC7CE")
+    assert degraded[0][3].number_format == '+0.00"%";-0.00"%";0.00"%"'
+
+    # 劣化汇总按严重度倒序：-20% 在 -15% 前面
+    degraded_sheet = workbook["子项劣化汇总"]
+    percentages = [row[4].value for row in degraded_sheet.iter_rows(min_row=2)]
+    assert percentages == [-20.0, -15.0]
+
+
 def test_写出对比表格_spark与spark_docker用宽表明细(tmp_path):
     """spark 明细：一行一个测试项，各轮与平均值**横向并列**（需求方 2026-10-12）。
 
@@ -224,11 +297,12 @@ def test_写出对比表格_首表是套级汇总(tmp_path):
 
     workbook = _写出(tmp_path)
 
-    assert workbook.sheetnames[0] == "汇总"
+    # 需求变更（2026-10-16）：新增「说明」首页，首个 sheet 不再是「汇总」。
+    assert workbook.sheetnames[0] == "说明"
     assert "fio" in workbook.sheetnames
 
     summary = workbook["汇总"]
-    # 表头是 A–E 五列；F1 上是套级口径的显著标注。
+    # 表头是 A–E 五列；汇总行按类别分组，故首行数据是类别标题。
     assert [cell.value for cell in summary[1]][:5] == [
         "测试套",
         "结果A",
@@ -236,7 +310,7 @@ def test_写出对比表格_首表是套级汇总(tmp_path):
         "差距百分比",
         "是否劣化",
     ]
-    assert [row[0] for row in _明细行(workbook, "汇总")] == ["fio"]
+    assert [row[0] for row in _明细行(workbook, "汇总")] == ["基础性能测试", "fio"]
 
 
 def test_写出对比表格_子项劣化汇总表只列被判为劣化的子项(tmp_path):
@@ -298,8 +372,14 @@ def test_写出对比表格_汇总表的套级唯一值取子项几何平均(tmp
     assert stream_row[2] == pytest.approx(100.0, rel=1e-12)
     assert stream_row[3] == pytest.approx(-50.0, rel=1e-9)
     assert stream_row[4] == "是"
-    # 汇总表要说明套级值的口径来源（各套口径不同，且已逐套确认）。
-    assert "口径按测试套声明" in str(summary["F1"].value)
+    # 需求变更（2026-10-16）：口径说明从「汇总」的 F1 移到「说明」页。
+    notes_text = " ".join(
+        str(cell.value)
+        for row in workbook["说明"].iter_rows()
+        for cell in row
+        if cell.value is not None
+    )
+    assert "口径按测试套声明" in notes_text
 
 
 def test_写出对比表格_套级几何平均不会因数值过大而溢出(tmp_path):
