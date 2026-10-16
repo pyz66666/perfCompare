@@ -135,6 +135,41 @@ def test_加载结果目录_接入其余三个场景化套(tmp_path):
     assert results.value("mysql_sysbench", "oltp_read_write", "TPS") == pytest.approx(6658.3325)
 
 
+def test_加载结果目录_解析speccpu四份报告(tmp_path):
+    """SPEC CPU2017 ASCII 报告：各 benchmark 的选中分数 + 汇总行。
+
+    四份文件（int/fp × single/max）是**四个独立测试套**（需求方 2026-10-16）。
+    汇总行标签按类：整数用 `SPECrate2017_int_base`、浮点用 `SPECrate2017_fp_base`。
+    期望值取自文件（如 `500.perlbench_r  1  300  5.30  *`）。
+    """
+    base_dir = tmp_path / "基础性能测试"
+    base_dir.mkdir()
+    for name in (
+        "cpu2017_int_single.txt",
+        "cpu2017_int_max.txt",
+        "cpu2017_fp_single.txt",
+        "cpu2017_fp_max.txt",
+    ):
+        shutil.copy(str(FIXTURE / "基础性能测试" / name), str(base_dir / name))
+
+    results = load(str(tmp_path))
+
+    assert results.value("speccpu2017_int_single", "SPECrate2017_int_base", "") == 5.66
+    assert results.value("speccpu2017_int_max", "SPECrate2017_int_base", "") == 896.0
+    assert results.value("speccpu2017_fp_single", "SPECrate2017_fp_base", "") == 9.19
+    assert results.value("speccpu2017_fp_max", "SPECrate2017_fp_base", "") == 849.0
+
+    # 各 benchmark 的选中分数（行尾 `*`）
+    assert results.value("speccpu2017_int_single", "500.perlbench_r", "") == 5.30
+    assert results.value("speccpu2017_int_single", "557.xz_r", "") == 2.95
+    assert results.value("speccpu2017_fp_single", "503.bwaves_r", "") == 46.2
+
+    # 无效的 benchmark（fp_single 里 507.cactuBSSN_r 状态为 VE、分数为 NR）没有分数，
+    # 不应伪造出数据 —— 这也是 INVALID RUN 的后果之一。
+    with pytest.raises(KeyError):
+        results.value("speccpu2017_fp_single", "507.cactuBSSN_r", "")
+
+
 def test_加载结果目录_解析spark与spark_docker(tmp_path):
     """`spark.out` = 103 项 × 3 轮 + 1 个汇总（汇总值需 ÷3 得到单轮平均）；
     `spark_docker.out0/1/2` = 三个文件各代表一个 docker（一套多文件）。

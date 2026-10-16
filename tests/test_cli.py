@@ -183,6 +183,36 @@ def test_命令行_表头名称来自配置(tmp_path):
     ]
 
 
+def test_命令行_无效结果给出告警(tmp_path, capsys):
+    """带无效标记的结果文件要提示 —— 其汇总值是估计值、不可作为可报告结果
+    （需求方 2026-10-16 确认要告警）。"""
+    result_dir = tmp_path / "结果"
+    result_dir.mkdir()
+    shutil.copy(
+        str(FIXTURE / "基础性能测试" / "cpu2017_int_single.txt"),
+        str(result_dir / "cpu2017_int_single.txt"),
+    )
+    config_path = _写配置(tmp_path, result_dir, result_dir)
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--excel",
+            str(tmp_path / "对比表格.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    warned = [line for line in output.splitlines() if line.startswith("    ⚠")]
+    assert warned, "实际输出为：\n" + output
+    assert "INVALID RUN" in warned[0]
+    assert "speccpu2017_int_single" in warned[0]
+
+
 def test_命令行_报告被排除的测试套(tmp_path, capsys):
     """只在一侧存在的套要明说被排除了，不能静默不出现。
 

@@ -282,6 +282,23 @@ def test_只比对两侧都包含的测试套(tmp_path):
     assert comparison.excluded_suites() == ["netperf"]
 
 
+def test_汇总口径_speccpu四个独立套各出一行(tmp_path):
+    """speccpu2017 是四个独立套（需求方 2026-10-16），各自一行汇总，取文件的 SPECrate 值。
+
+    期望值取自四份报告：5.66 / 896 / 9.19 / 849。
+    （若口径缺失，会退化成「全部子项几何平均」，数值完全不同 —— 断言因而有效。）
+    """
+    results = load(str(FIXTURE))
+
+    comparison = compare(results, results, threshold_pct=5.0)
+
+    by_label = {row.label: row for row in comparison.suite_rows()}
+    assert by_label["speccpu2017（单核整数）"].baseline == pytest.approx(5.66)
+    assert by_label["speccpu2017（多核整数）"].baseline == pytest.approx(896)
+    assert by_label["speccpu2017（单核浮点）"].baseline == pytest.approx(9.19)
+    assert by_label["speccpu2017（多核浮点）"].baseline == pytest.approx(849)
+
+
 def test_汇总口径_spark与spark_docker(tmp_path):
     """spark 汇总行 = 文件末尾汇总值 ÷3（23824.969/3 = 7941.656333…）；
     spark_docker 汇总行 = 三个 docker 汇总值的平均（5390.76/5794.284/6101.824）。"""

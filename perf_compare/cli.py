@@ -113,17 +113,27 @@ def _report_read(directory, report, label):
     区分「文件不在」与「文件在但解析不出数据」很重要：前者是没测或命名不同，
     后者是格式变了 —— 笼统说「未找到」会让用户无法定位。
     """
-    read = [suite for suite, _, count, _ in report if count > 0]
+    read = [suite for suite, _, count, _, _ in report if count > 0]
     empty = [
-        os.path.basename(path) for _, path, count, _ in report if path is not None and count == 0
+        os.path.basename(path)
+        for _, path, count, _, _ in report
+        if path is not None and count == 0
     ]
-    absent = [suite for suite, path, _, _ in report if path is None]
+    absent = [suite for suite, path, _, _, _ in report if path is None]
 
     print("{0} {1}：读到 {2} 个测试套 {3}".format(label, directory, len(read), read))
     if empty:
         print("    文件在、但没解析出数据（可能是格式不符）：{0}".format(empty))
     if absent:
         print("    未找到（未测或命名不同）：{0}".format(absent))
+
+    # 结果文件里的告警标记（如 INVALID RUN，其汇总值不可报告），按提示文案归并后打印。
+    by_note = {}
+    for suite, _, _, _, notes in report:
+        for note in notes:
+            by_note.setdefault(note, []).append(suite)
+    for note in sorted(by_note):
+        print("    ⚠ {0}：{1}".format(note, sorted(by_note[note])))
 
 
 def _write_error_log(log_dir, argv):

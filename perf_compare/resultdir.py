@@ -29,6 +29,11 @@ _SUITE_FILES = {
     "flink_wordcount": ("场景化测试", ("flink_wordcount.json",), "flink_json"),
     "flink_6000c": ("场景化测试", ("flink_6000c.txt",), "flink_6000c"),
     "spark": ("场景化测试", ("spark.out",), "spark"),
+    # speccpu2017 是**四个独立测试套**（需求方 2026-10-16）：int/fp × single/max。
+    "speccpu2017_int_single": ("基础性能测试", ("cpu2017_int_single.txt",), "speccpu"),
+    "speccpu2017_int_max": ("基础性能测试", ("cpu2017_int_max.txt",), "speccpu"),
+    "speccpu2017_fp_single": ("基础性能测试", ("cpu2017_fp_single.txt",), "speccpu"),
+    "speccpu2017_fp_max": ("基础性能测试", ("cpu2017_fp_max.txt",), "speccpu"),
     # 一套对多文件：三个文件各代表一个 docker。
     "spark_docker": (
         "场景化测试",
@@ -78,12 +83,37 @@ def load_with_report(directory):
     for suite, (sub_dir, file_names, parser_name) in sorted(_SUITE_FILES.items()):
         paths = _locate_all(directory, sub_dir, file_names)
         if not paths:
-            report.append((suite, None, 0, None))
+            report.append((suite, None, 0, None, []))
             continue
         parsed = _PARSERS[parser_name](paths)
         suites[suite] = parsed
-        report.append((suite, paths[0], sum(len(subs) for subs in parsed.values()), parsed))
+        report.append(
+            (
+                suite,
+                paths[0],
+                sum(len(subs) for subs in parsed.values()),
+                parsed,
+                _file_notes(paths[0]),
+            )
+        )
     return ResultSet(suites), report
+
+
+# 结果文件里出现这些标记时给出提示（需求方 2026-10-16 确认要告警）：
+# `INVALID RUN` 表示该次运行的结果不可报告，汇总值只是估计值。
+_FILE_MARKERS = (
+    ("INVALID RUN", "INVALID RUN（汇总值为估计值，不可作为可报告结果）"),
+)
+
+
+def _file_notes(path):
+    """扫描结果文件里的已知告警标记，返回提示文案列表。"""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return []
+    return [message for marker, message in _FILE_MARKERS if marker in text]
 
 
 def _locate_all(directory, sub_dir, file_names):
@@ -291,6 +321,42 @@ def _parse_spark_docker(paths):
     return items
 
 
+def _is_number(text):
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _parse_speccpu(paths):
+    """SPEC CPU2017 ASCII 报告：各 benchmark 的选中分数 + 汇总行。
+
+    四份文件（int/fp × single/max）各自是一个独立测试套，故各自解析。汇总行标签按类取
+    `SPECrate2017_int_base`（整数）或 `SPECrate2017_fp_base`（浮点）。
+
+    无效的 benchmark（状态 VE、分数 NR）**没有分数就跳过**，不伪造数据 —— 这是
+    `INVALID RUN` 的后果之一（例如 fp 单核的 `507.cactuBSSN_r`）。
+    """
+    path = paths[0]
+    summary_label = (
+        "SPECrate2017_fp_base"
+        if "fp" in os.path.basename(path)
+        else "SPECrate2017_int_base"
+    )
+    items = {}
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            fields = line.split()
+            if len(fields) == 5 and fields[4] == "*" and _is_number(fields[3]):
+                # 各 benchmark 的选中行：`名称 副本数 运行时间 分数 *`
+                items[fields[0]] = {"": float(fields[3])}
+            elif len(fields) == 3 and fields[1] == summary_label and _is_number(fields[2]):
+                # 汇总行：`Est. SPECrate2017_int_base   5.66`
+                items[summary_label] = {"": float(fields[2])}
+    return items
+
+
 # 解析器注册表。统一接口：接收**文件路径列表**（单文件套只用一个）。
 _PARSERS = {
     None: _single(_parse_long_table),
@@ -302,4 +368,5 @@ _PARSERS = {
     "flink_6000c": _single(_parse_flink_6000c),
     "spark": _parse_spark,
     "spark_docker": _parse_spark_docker,
+    "speccpu": _parse_speccpu,
 }

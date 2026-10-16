@@ -200,6 +200,19 @@ _SUMMARY_RECIPES = {
         "partition": [("spark_docker", ["汇总"], False)],
         "aggregate": "mean",
     },
+    # speccpu2017 是四个独立套（需求方 2026-10-16），各出一行汇总；SPECrate 越大越好。
+    "speccpu2017_int_single": {
+        "partition": [("speccpu2017（单核整数）", ["SPECrate2017_int_base"], True)]
+    },
+    "speccpu2017_int_max": {
+        "partition": [("speccpu2017（多核整数）", ["SPECrate2017_int_base"], True)]
+    },
+    "speccpu2017_fp_single": {
+        "partition": [("speccpu2017（单核浮点）", ["SPECrate2017_fp_base"], True)]
+    },
+    "speccpu2017_fp_max": {
+        "partition": [("speccpu2017（多核浮点）", ["SPECrate2017_fp_base"], True)]
+    },
 }
 
 
