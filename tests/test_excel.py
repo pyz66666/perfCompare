@@ -111,6 +111,41 @@ def test_写出对比表格_表头名称的默认值仍是结果A与结果B(tmp_
     assert [cell.value for cell in workbook["汇总"][1]][:3] == ["测试套", "结果A", "结果B"]
 
 
+def test_写出对比表格_劣化幅度用分档底色且不用条件格式(tmp_path):
+    """兼容性优先（需求方 2026-10-16）：差距列按劣化幅度用**纯静态填充**分档，
+    不使用条件格式（数据条在 WPS 与 Excel 上表现可能不一致）。
+
+    算例：同一测试项下三个子项分别劣化 60% / 30% / 10%。
+    """
+    _两侧样例(tmp_path)
+    fio = tmp_path / "candidate" / "基础性能测试" / "fio.txt"
+    _扰动(fio, "read_iops_blocksize", "blocksize-4k", 0.40)    # -60%
+    _扰动(fio, "read_iops_blocksize", "blocksize-16k", 0.70)   # -30%
+    _扰动(fio, "read_iops_blocksize", "blocksize-32k", 0.90)   # -10%
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+    out_path = tmp_path / "对比表格.xlsx"
+
+    write_excel(comparison, str(out_path))
+
+    sheet = openpyxl.load_workbook(str(out_path))["fio"]
+    fills = {}
+    for row in sheet.iter_rows(min_row=2):
+        if row[0].value.startswith("read_iops_blocksize-"):
+            fills[row[0].value.split("-", 1)[1]] = str(row[3].fill.fgColor.rgb)
+
+    assert fills["blocksize-4k"].endswith("C00000")     # ≥50% 深红
+    assert fills["blocksize-16k"].endswith("FF7C80")    # ≥20% 中红
+    assert fills["blocksize-32k"].endswith("FFC7CE")    # 超阈值 浅红
+
+    # 全工作簿不使用条件格式
+    for name in sheet.parent.sheetnames:
+        assert not list(sheet.parent[name].conditional_formatting)
+
+
 def test_写出对比表格_说明首页与表格美化(tmp_path):
     """必做美化项（需求方 2026-10-16）：
 

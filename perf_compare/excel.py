@@ -11,7 +11,6 @@
 import os
 
 import openpyxl
-from openpyxl.formatting.rule import DataBarRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -68,6 +67,15 @@ _链接字体 = Font(color="0563C1", underline="single")
 # 差距百分比：带正负号与 % 单位；数值本身不动。
 _百分比格式 = '+0.00"%";-0.00"%";0.00"%"'
 
+# 劣化幅度分档（**纯静态填充**，不用条件格式 —— 数据条在 WPS 与 Excel 上表现可能不一致）。
+# 顺序为从严重到轻微，取第一个命中的档。
+_劣化分档 = (
+    (50.0, PatternFill("solid", fgColor="C00000"), Font(bold=True, color="FFFFFF")),
+    (20.0, PatternFill("solid", fgColor="FF7C80"), Font(bold=True, color="9C0006")),
+)
+# 改善幅度分档（同样只用静态填充）。
+_改善分档 = ((20.0, PatternFill("solid", fgColor="A9D08E")),)
+
 
 def write_excel(comparison, path, labels=DEFAULT_LABELS, info=None):
     """把一次比对写成 xlsx。
@@ -123,9 +131,9 @@ def _写说明页(sheet, labels, info):
         ("套级值口径", _套级口径说明),
         ("", None),
         ("【颜色图例】", None),
-        ("浅红底", "劣化（差距百分比为往变差方向、且超过阈值）"),
+        ("浅红／中红／深红", "劣化，颜色越深幅度越大（≥20% 中红、≥50% 深红）"),
         ("浅绿底", "改善（往变好的方向变化）"),
-        ("差距百分比列", "带正负号与 % 单位；条件格式数据条用于快速看幅度"),
+        ("差距百分比列", "带正负号与 % 单位；底色深浅表示劣化幅度"),
         ("", None),
         ("【工作表】", None),
         ("{0}".format(SUMMARY_SHEET), "套级唯一值对比，按类别分组；套名可点击跳到该套明细"),
@@ -245,16 +253,28 @@ def _写宽表明细(sheet, suite, measurements, rows, labels):
 
 
 def _上色(sheet, row_index, pct_row, pct_column, row):
-    """劣化行标红、改善行标绿；百分比列用带符号百分号格式（不改数值）。"""
+    """劣化行标红、改善行标绿；差距单元格按幅度加深底色（百分比列用带符号百分号格式）。"""
     pct_cell = sheet.cell(row=pct_row, column=pct_column)
     pct_cell.number_format = _百分比格式
     if row.degraded:
         for cell in sheet[row_index]:
             cell.fill = _劣化填充
         pct_cell.font = _劣化字体
+        _按幅度分档(pct_cell, _严重度(row), _劣化分档)
     elif _是否改善(row):
         for cell in sheet[row_index]:
             cell.fill = _改善填充
+        _按幅度分档(pct_cell, abs(row.pct), _改善分档)
+
+
+def _按幅度分档(cell, magnitude, grades):
+    """按幅度给单元格换更醒目的底色（静态填充，跨软件一致）。"""
+    for limit, fill, *rest in grades:
+        if magnitude >= limit:
+            cell.fill = fill
+            if rest:
+                cell.font = rest[0]
+            return
 
 
 def _是否改善(row):
@@ -282,27 +302,6 @@ def _修饰表(sheet, wide=False):
     sheet.auto_filter.ref = "A1:{0}{1}".format(get_column_letter(last_column), sheet.max_row)
     for index in range(1, last_column + 1):
         sheet.column_dimensions[get_column_letter(index)].width = _列宽(sheet, index)
-    _加数据条(sheet, last_column)
-
-
-def _加数据条(sheet, last_column):
-    """给「差距百分比」列加数据条，便于一眼看幅度。"""
-    column = _百分比列(sheet, last_column)
-    if column is None or sheet.max_row < 2:
-        return
-    letter = get_column_letter(column)
-    sheet.conditional_formatting.add(
-        "{0}2:{0}{1}".format(letter, sheet.max_row),
-        DataBarRule(start_type="num", start_value=-100, end_type="num", end_value=100,
-                    color="638EC6"),
-    )
-
-
-def _百分比列(sheet, last_column):
-    for index in range(1, last_column + 1):
-        if sheet.cell(row=1, column=index).value == "差距百分比":
-            return index
-    return None
 
 
 def _列宽(sheet, index):
