@@ -15,6 +15,7 @@ import traceback
 from .compare import compare
 from .config import load_config
 from .excel import write_excel
+from .report import write_report
 from .resultdir import load_with_report
 
 LOG_FILE_NAME = "perf-compare.log"
@@ -39,6 +40,17 @@ def _build_parser():
     )
     parser.add_argument("--config", required=True, help="配置文件路径（JSON）")
     parser.add_argument("--excel", required=True, help="对比表格输出路径（.xlsx）")
+    parser.add_argument(
+        "--report",
+        help="测试报告输出前缀（可选）：写出 <前缀>.txt 与 <前缀>.html",
+    )
+    parser.add_argument(
+        "--report-style",
+        type=int,
+        default=2,
+        choices=(1, 2, 3),
+        help="报告版本：1=定性分级 2=区间分档（默认） 3=精确百分比",
+    )
     parser.add_argument(
         "--log-dir", default=DEFAULT_LOG_DIR, help="报错日志目录（默认 logs/）"
     )
@@ -106,6 +118,26 @@ def _run(args):
             "excluded_suites": excluded,
         },
     )
+    if args.report:
+        txt_path, html_path = write_report(
+            comparison,
+            args.report,
+            _显示名(config),
+            {
+                "threshold_pct": config.threshold_pct,
+                "baseline_kernel": config.baseline.kernel_version,
+                "candidate_kernel": config.candidates[0].kernel_version,
+                "baseline_commit": config.baseline.commit_id,
+                "candidate_commit": config.candidates[0].commit_id,
+            },
+            style=args.report_style,
+        )
+        print(
+            "已写出测试报告：{0}、{1}（版本 V{2}，不含测量值）".format(
+                txt_path, html_path, args.report_style
+            )
+        )
+
     print(
         "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(
             args.excel,
