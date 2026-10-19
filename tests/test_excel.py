@@ -241,13 +241,18 @@ def test_写出对比表格_spark与spark_docker用宽表明细(tmp_path):
         "是否劣化",
     ]
     rows = [[cell.value for cell in row] for row in sheet.iter_rows(min_row=2)]
-    assert [row[0] for row in rows] == list(SPARK_ITEMS)
+    assert [row[0] for row in rows] == list(SPARK_ITEMS) + ["汇总（文件自带）"]
     first = rows[0]
     assert first[1] == 33.498
     assert first[2] == 31.663
     assert first[3] == 30.929
     assert first[4] == pytest.approx(32.03)
     assert first[10] == "否"
+
+    # 末行归档文件自带的汇总值（需求方 2026-10-16）：轮次列不适用，值放在 avg 列（已 ÷3）
+    archive = rows[-1]
+    assert archive[1] == "—"
+    assert archive[4] == pytest.approx(23824.969 / 3)
 
     docker_sheet = workbook["spark_docker"]
     assert [cell.value for cell in docker_sheet[1]] == [
@@ -263,6 +268,14 @@ def test_写出对比表格_spark与spark_docker用宽表明细(tmp_path):
     assert docker_rows[0][2] == 14.981
     assert docker_rows[0][3] == 23.628
     assert docker_rows[0][4] == pytest.approx(21.176333333333336)
+
+    # 末行归档：三个 docker 各自的末尾汇总值 + 它们的平均
+    d_archive = docker_rows[-1]
+    assert d_archive[0] == "汇总（文件自带）"
+    assert d_archive[1] == 5390.76
+    assert d_archive[2] == 5794.284
+    assert d_archive[3] == 6101.824
+    assert d_archive[4] == pytest.approx((5390.76 + 5794.284 + 6101.824) / 3)
 
     # 格式必须落在「差距百分比」列上，不能错加到平均值列（曾因列号算错而错位：
     # 平均列被显示成 `+40.04%`，真正的差距列反而没有 %）。

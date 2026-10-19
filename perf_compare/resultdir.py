@@ -314,10 +314,13 @@ def _parse_spark_docker(paths):
         }
         entry["avg"] = sum(values) / len(values)
         items[name] = entry
+    # 汇总项也给出三个 docker 各自的值与平均（平均用于明细表的归档行显示）。
+    summaries = [numbers[count] for numbers in per_docker]
     items["汇总"] = {
-        "docker{0}".format(docker_index): numbers[count]
-        for docker_index, numbers in enumerate(per_docker)
+        "docker{0}".format(docker_index): value
+        for docker_index, value in enumerate(summaries)
     }
+    items["汇总"]["avg"] = sum(summaries) / len(summaries)
     return items
 
 

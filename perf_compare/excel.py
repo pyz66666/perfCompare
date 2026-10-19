@@ -24,7 +24,8 @@ DEGRADED_SHEET = "子项劣化汇总"
 DEFAULT_LABELS = ("结果A", "结果B")
 
 # 宽表明细的套：一行一个测试项，各次测量**横向并列**（需求方 2026-10-12）。
-# 取值 = 该套每次测量的子项名；行序按源文件顺序（spark_items.py），且不含「汇总」项。
+# 取值 = 该套每次测量的子项名；行序按源文件顺序（spark_items.py）；
+# 文件自带的汇总值不作为普通行，而是放在明细末行归档（见 _写归档汇总行）。
 _WIDE_LAYOUTS = {
     "spark": ("轮1", "轮2", "轮3"),
     "spark_docker": ("docker0", "docker1", "docker2"),
@@ -217,8 +218,8 @@ def _写明细表(sheet, suite, rows, labels):
 def _写宽表明细(sheet, suite, measurements, rows, labels):
     """宽表：`测试子项 | 结果A 各次测量 + 平均 | 结果B 同 | 差距百分比 | 是否劣化`。
 
-    只列出源文件里真实存在的测试项（**不含「汇总」** —— 它属于汇总行），
-    并按**源文件顺序**排列（字母序会把 native_q10 排到 native_q2 前面，不可用）。
+    只列出源文件里真实存在的测试项；文件自带的汇总值放在末行归档（需求方 2026-10-16），
+    行序按**源文件顺序**排列（字母序会把 native_q10 排到 native_q2 前面，不可用）。
     """
     sheet.append(
         ["测试子项"]
@@ -253,6 +254,61 @@ def _写宽表明细(sheet, suite, measurements, rows, labels):
         )
         if average is not None:
             _上色(sheet, sheet.max_row, sheet.max_row, pct_column, average)
+
+    _写归档汇总行(sheet, by_key, measurements, pct_column)
+
+
+def _写归档汇总行(sheet, by_key, measurements, pct_column):
+    """把**文件自带的汇总值**也留在明细末行归档（需求方 2026-10-16）。
+
+    - `spark`：文件末尾的汇总值（解析时已 ÷3），放在「平均」列 —— 它是三轮的合计平均值，
+      各轮列对该行不适用，写 `—`。
+    - `spark_docker`：三个 docker 各自的末尾汇总值，以及它们的平均。
+
+    这一行只作归档展示；是否劣化以汇总表那行为准（两者取的是同一个值）。
+    """
+    if ("汇总", "avg") not in by_key and ("汇总", "值") not in by_key:
+        return
+
+    target = by_key.get(("汇总", "avg")) or by_key.get(("汇总", "值"))
+    sheet.append(
+        ["汇总（文件自带）"]
+        + [_归档值(by_key, name, "baseline") for name in measurements]
+        + [_归档平均(by_key, measurements, "baseline")]
+        + [_归档值(by_key, name, "candidate") for name in measurements]
+        + [_归档平均(by_key, measurements, "candidate")]
+        + [
+            _格式百分比(target.pct if target is not None else None),
+            "是" if target is not None and target.degraded else "否",
+        ]
+    )
+    if target is not None:
+        _上色(sheet, sheet.max_row, sheet.max_row, pct_column, target)
+
+
+def _归档值(by_key, name, side):
+    """归档行里某次测量的值；该行没有这一列的测量时写 `—`（不是「缺失」）。"""
+    row = by_key.get(("汇总", name))
+    if row is None:
+        return "—"
+    return _测量值(getattr(row, side))
+
+
+def _归档平均(by_key, measurements, side):
+    """归档行的平均值：优先用显式的 avg / 值，否则取各次测量的平均（仅用于展示）。"""
+    for key in ("avg", "值"):
+        row = by_key.get(("汇总", key))
+        if row is not None:
+            return _测量值(getattr(row, side))
+    numbers_ = [
+        getattr(by_key[("汇总", name)], side)
+        for name in measurements
+        if ("汇总", name) in by_key
+        and getattr(by_key[("汇总", name)], side) is not None
+    ]
+    if not numbers_:
+        return "—"
+    return sum(numbers_) / len(numbers_)
 
 
 def _上色(sheet, row_index, pct_row, pct_column, row):
