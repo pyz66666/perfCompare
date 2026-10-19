@@ -228,7 +228,10 @@ def _写宽表明细(sheet, suite, measurements, rows, labels):
         + ["{0}-avg".format(labels[1])]
         + ["差距百分比", "是否劣化"]
     )
-    pct_column = len(measurements) * 2 + 3
+    # 列序：测试子项(1) | A 各轮(n) | A-avg(1) | B 各轮(n) | B-avg(1) | 差距百分比 | 是否劣化
+    # 故「差距百分比」= 1 + n + 1 + n + 1 + 1 = 2n + 4。曾误写成 2n+3，导致 % 格式与分档
+    # 色错加到 B-avg 列上（平均值被显示成百分数，看起来像“对比结果”）。
+    pct_column = len(measurements) * 2 + 4
 
     by_key = {(row.item, row.sub_item): row for row in rows if row.suite == suite}
     present = {item for item, _ in by_key}

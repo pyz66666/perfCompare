@@ -264,6 +264,15 @@ def test_写出对比表格_spark与spark_docker用宽表明细(tmp_path):
     assert docker_rows[0][3] == 23.628
     assert docker_rows[0][4] == pytest.approx(21.176333333333336)
 
+    # 格式必须落在「差距百分比」列上，不能错加到平均值列（曾因列号算错而错位：
+    # 平均列被显示成 `+40.04%`，真正的差距列反而没有 %）。
+    percent_format = '+0.00"%";-0.00"%";0.00"%"'
+    for wide, avg_columns in ((sheet, (5, 9)), (docker_sheet, (5, 9))):
+        assert wide.cell(row=2, column=10).value is not None
+        assert wide.cell(row=2, column=10).number_format == percent_format
+        for column in avg_columns:
+            assert wide.cell(row=2, column=column).number_format == "General"
+
 
 def test_写出对比表格_输出目录不存在时自动创建(tmp_path):
     """输出目录不存在就直接失败，是个不必要的坑 —— 应当自动建目录。"""
