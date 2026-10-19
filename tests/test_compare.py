@@ -338,6 +338,45 @@ def test_spark执行时间变大应判为劣化且只判定avg(tmp_path):
     assert rows[("native_q1", "轮1")].degraded is False
 
 
+def test_恰好等于阈值不算劣化且不被浮点误差误判(tmp_path):
+    """D15：严格大于阈值才算劣化，「等于」不算。
+
+    必须用**能复现浮点误差的具体数值**：`3815.46 × 0.95 = 3624.687`，
+    算出来的 pct 是 `-5.0000000000000036`；若直接写 `-pct > 5` 会被判成劣化，
+    而表格里显示的是 `-5.00%` —— 结论与显示自相矛盾（演示中真实踩到）。
+    """
+    base_dir = tmp_path / "baseline" / "基础性能测试"
+    cand_dir = tmp_path / "candidate" / "基础性能测试"
+    base_dir.mkdir(parents=True)
+    cand_dir.mkdir(parents=True)
+    (base_dir / "fio.txt").write_text(
+        "read_iops_blocksize 恰好阈值 略微超过\naverage 3815.46 1000.0\nvariance 0.0 0.0\n",
+        encoding="utf-8",
+    )
+    (cand_dir / "fio.txt").write_text(
+        "read_iops_blocksize 恰好阈值 略微超过\naverage 3624.687 949.0\nvariance 0.0 0.0\n",
+        encoding="utf-8",
+    )
+
+    comparison = compare(
+        load(str(tmp_path / "baseline")),
+        load(str(tmp_path / "candidate")),
+        threshold_pct=5.0,
+    )
+
+    rows = {(row.item, row.sub_item): row for row in comparison.rows()}
+    at_boundary = rows[("read_iops_blocksize", "恰好阈值")]
+    over = rows[("read_iops_blocksize", "略微超过")]
+
+    # 该算例的 pct 确为 -5.0000000000000036（浮点误差），断言它确实落在边界上
+    assert at_boundary.pct < -5.0
+    assert at_boundary.pct == pytest.approx(-5.0, rel=1e-12)
+    # 等于阈值 → 不算劣化（按显示精度比较）
+    assert at_boundary.degraded is False
+    # 略超阈值（-5.1%）→ 算劣化
+    assert over.degraded is True
+
+
 def test_时延类指标变大_应判为劣化(tmp_path):
     """时延是「越小越好」：**变大**才是劣化。
 

@@ -124,12 +124,15 @@ def _is_degraded(pct, threshold_pct, higher_is_better=True):
 
     方向若一律按「越大越好」处理，时延上升会被判成没劣化 —— 会漏报，比崩溃更危险。
     百分比无定义（基线为 0、单边缺失）时无从判定，一律不算劣化。
+
+    **按显示精度（2 位小数）比较**：`3815.46 × 0.95` 的 pct 实际是 `-5.0000000000000036`，
+    直接与阈值比较会判成劣化，而表格显示的是 `-5.00%` —— 结论与显示自相矛盾。四舍五入到
+    2 位后再比较，判定与用户看到的一致。
     """
     if pct is None:
         return False
-    if higher_is_better:
-        return -pct > threshold_pct
-    return pct > threshold_pct
+    magnitude = -pct if higher_is_better else pct
+    return round(magnitude, 2) > round(threshold_pct, 2)
 
 
 # 「越小越好」的测试项。这是一个**临时口径**：完整的方向表与配置覆盖属于 T6，
