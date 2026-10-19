@@ -104,11 +104,17 @@ def test_默认不展开子项_开启后才总结子项(tmp_path):
     """
     comparison = _造比较(tmp_path, {1: 0.40, 2: 0.75})   # 同一测试项下两个子项劣化
 
-    default_txt, _ = write_report(comparison, str(tmp_path / "默认"), info=INFO, style=2)
+    default_txt, default_html = write_report(
+        comparison, str(tmp_path / "默认"), info=INFO, style=2
+    )
     default = Path(default_txt).read_text(encoding="utf-8")
-    assert "read_iops_blocksize" in default          # 测试项在
-    assert "blocksize-4k" not in default             # 子项名不出现（默认关闭）
+    # 关闭时粒度退到「测试套」：连测试项名都不出现（需求方 2026-10-19）
+    assert "fio" in default
+    assert "read_iops_blocksize" not in default
+    assert "blocksize-4k" not in default
     assert "子项劣化汇总" not in default
+    assert "个子项" not in default                    # 不再提示子项个数
+    assert "各测试套劣化项数" not in Path(default_html).read_text(encoding="utf-8")
 
     opened_txt, opened_html = write_report(
         comparison, str(tmp_path / "开启"), info=INFO, style=2, summarize_subitems=True

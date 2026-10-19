@@ -4,15 +4,12 @@
 本模块只使用「劣化项名称 / 子项 / 方向 / 劣化程度」，绝不读写 `Row.baseline`、`Row.candidate`
 的数值 —— 唯一例外是 `pct`（差距百分比本身是分析结论，不是原始测量值）。
 
-三个版本（`style`）的区别只在「劣化程度怎么表达」：
-- 1 定性   ：严重 / 明显 / 轻微
-- 2 分档   ：5%~10% / 10%~30% / >30%
-- 3 精确   ：带符号的百分比
+`summarize_subitems`（默认关闭）决定报告的**粒度**：
+- 关闭：劣化清单只到「测试套」一级（等同汇总表那一栏），不出现测试项、子项名，
+        也不显示「各测试套劣化项数」图表；
+- 开启：清单到「测试项」一级，并额外输出「子项劣化汇总」一节与按套的图表。
 
-子项是否展开由 `summarize_subitems` 控制（**默认关闭**）：
-- 关闭：劣化项清单只列到「测试套 / 测试项」，**不出现子项名**；
-- 开启：额外输出一节「子项劣化汇总」，逐个列出劣化子项。
-
+`style` 只影响「劣化程度怎么表达」：1 定性 / 2 区间 / 3 精确百分比。
 系统标识里**暂不显示报告版本与 commitId**（需求方 2026-10-19）。
 """
 import datetime
@@ -25,13 +22,21 @@ HTML_SUFFIX = ".html"
 
 STYLE_NAMES = {1: "定性分级", 2: "区间分档", 3: "精确百分比"}
 
-# 劣化程度分档（上下界按「往变差方向的幅度」百分比）。
+# 劣化程度分档：(阈值, 名称, 区间文案)
 _GRADES = (
     (50.0, "严重", ">30%"),
     (20.0, "明显", "10%~30%"),
     (0.0, "轻微", "5%~10%"),
 )
 _GRADE_COLORS = {"严重": "#c0392b", "明显": "#e67e22", "轻微": "#c9a227"}
+
+# 报告粒度（由 summarize_subitems 决定）
+_SUITE, _ITEM, _SUB = "suite", "item", "sub"
+_水平头 = {
+    _SUITE: "测试套",
+    _ITEM: "测试套 / 测试项",
+    _SUB: "测试套 / 测试项 / 子项",
+}
 
 
 def write_report(
@@ -49,16 +54,22 @@ def write_report(
     info = dict(info or {})
     info.setdefault("compared_suites", len({row.suite for row in comparison.rows()}))
 
-    items = _item_findings(comparison, style)
-    subs = _subitem_findings(comparison, style) if summarize_subitems else []
+    if summarize_subitems:
+        level = _ITEM
+        entries = _item_findings(comparison, style)
+        subs = _subitem_findings(comparison, style)
+    else:
+        level = _SUITE
+        entries = _suite_findings(comparison, style)
+        subs = []
 
     txt_path = base_path + TXT_SUFFIX
     html_path = base_path + HTML_SUFFIX
     _确保父目录存在(txt_path)
     with open(txt_path, "w", encoding="utf-8") as handle:
-        handle.write(_render_txt(items, subs, labels, info, style))
+        handle.write(_render_txt(entries, subs, labels, info, style, level))
     with open(html_path, "w", encoding="utf-8") as handle:
-        handle.write(_render_html(items, subs, labels, info, style))
+        handle.write(_render_html(entries, subs, labels, info, style, level))
     return txt_path, html_path
 
 
@@ -79,23 +90,28 @@ def _entry(row, style):
     }
 
 
+def _suite_findings(comparison, style):
+    """按测试套聚合（开关关闭时的粒度，等同汇总表那一栏）。"""
+    worst = {}
+    for row in comparison.rows():
+        if not row.degraded:
+            continue
+        entry = _entry(row, style)
+        if entry["suite"] not in worst or entry["magnitude"] > worst[entry["suite"]]["magnitude"]:
+            worst[entry["suite"]] = entry
+    return _sorted(worst.values())
+
+
 def _item_findings(comparison, style):
-    """按「测试套 + 测试项」聚合的劣化（默认报告只用这一层，不暴露子项名）。"""
+    """按「测试套 + 测试项」聚合。"""
     worst = {}
     for row in comparison.rows():
         if not row.degraded:
             continue
         entry = _entry(row, style)
         key = (entry["suite"], entry["item"])
-        if key not in worst:
-            entry["count"] = 1
+        if key not in worst or entry["magnitude"] > worst[key]["magnitude"]:
             worst[key] = entry
-        else:
-            worst[key]["count"] += 1
-            if entry["magnitude"] > worst[key]["magnitude"]:
-                count = worst[key]["count"]
-                worst[key] = entry
-                worst[key]["count"] = count
     return _sorted(worst.values())
 
 
@@ -137,8 +153,10 @@ def _amount(magnitude, style, band):
     return "{0:.2f}%".format(magnitude)
 
 
-def _label(entry, with_sub_item):
-    if with_sub_item and entry["sub_item"]:
+def _label(entry, level):
+    if level == _SUITE:
+        return entry["suite"]
+    if level == _SUB and entry["sub_item"]:
         return "{0} / {1} / {2}".format(entry["suite"], entry["item"], entry["sub_item"])
     return "{0} / {1}".format(entry["suite"], entry["item"])
 
@@ -147,12 +165,20 @@ def _degree(entry):
     return entry["grade"] + ("（{0}）".format(entry["amount"]) if entry["amount"] else "")
 
 
+def _清单标题(level):
+    return "二、劣化测试套清单" if level == _SUITE else "二、劣化项清单"
+
+
+def _指标名(level):
+    return "劣化测试套" if level == _SUITE else "劣化测试项"
+
+
 # ——— TXT ———
 
 
-def _render_txt(items, subs, labels, info, style):
+def _render_txt(entries, subs, labels, info, style, level):
     stamp = info.get("generated_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    suites = sorted({entry["suite"] for entry in items})
+    suites = sorted({entry["suite"] for entry in entries})
 
     lines = [
         "性能测试结果对比报告",
@@ -167,17 +193,17 @@ def _render_txt(items, subs, labels, info, style):
         "",
         "一、总体结论",
         "",
-        _结论(items, suites),
+        _结论(entries, suites, level),
         "",
-        "二、劣化项清单",
+        _清单标题(level),
         "",
     ]
-    lines += _txt_table(items, with_sub_item=False) if items else ["   本次未发现超过阈值的劣化项。"]
+    lines += _txt_table(entries, level) if entries else ["   本次未发现超过阈值的劣化项。"]
 
     section = 3
     if subs:
         lines += ["", "{0}、子项劣化汇总".format(_序号(section)), ""]
-        lines += _txt_table(subs, with_sub_item=True)
+        lines += _txt_table(subs, _SUB)
         section += 1
 
     lines += [
@@ -193,26 +219,23 @@ def _render_txt(items, subs, labels, info, style):
     section += 1
 
     lines += ["", "{0}、分析提示词（可直接交给大模型继续分析）".format(_序号(section)), ""]
-    lines += _prompt_lines(items, subs, labels, info)
+    lines += _prompt_lines(entries, subs, labels, info, level)
     lines.append("")
     return "\n".join(lines)
 
 
-def _txt_table(entries, with_sub_item):
+def _txt_table(entries, level):
     rows = [
         "   {0}{1}{2}劣化程度".format(
-            _补齐("序号", 6), _补齐("测试套 / 测试项", 46), _补齐("方向", 12)
+            _补齐("序号", 6), _补齐(_水平头[level], 46), _补齐("方向", 12)
         ),
         "   " + "-" * 76,
     ]
     for index, entry in enumerate(entries, 1):
-        name = _label(entry, with_sub_item)
-        if not with_sub_item and entry.get("count", 1) > 1:
-            name += "（含 {0} 个子项）".format(entry["count"])
         rows.append(
             "   {0}{1}{2}{3}".format(
                 _补齐(str(index), 6),
-                _补齐(_截断(name, 44), 46),
+                _补齐(_截断(_label(entry, level), 44), 46),
                 _补齐(entry["direction"], 12),
                 _degree(entry),
             )
@@ -220,27 +243,28 @@ def _txt_table(entries, with_sub_item):
     return rows
 
 
-def _prompt_lines(items, subs, labels, info):
+def _prompt_lines(entries, subs, labels, info, level):
     lines = [
         "   你是一名性能工程专家。以下是某次性能测试的对比结论（数据已脱敏，不含测量值）：",
         "   - 对比对象：{0}（基线） vs {1}（对比）".format(labels[0], labels[1]),
         "   - 劣化阈值：{0}".format(_标(info.get("threshold_pct"), "{}%")),
-        "   - 判定结果：共比对 {0} 个测试套，其中 {1} 个套出现劣化，合计 {2} 个测试项。".format(
-            info.get("compared_suites"), len({entry["suite"] for entry in items}), len(items)
+        "   - 判定结果：共比对 {0} 个测试套，其中 {1} 个套出现劣化，合计 {2} 个{3}。".format(
+            info.get("compared_suites"),
+            len({entry["suite"] for entry in entries}),
+            len(entries),
+            "分析单位" if level == _SUITE else "测试项",
         ),
-        "   - 劣化项（套 / 项 / 方向 / 程度）：",
+        "   - 劣化项（{0} / 方向 / 程度）：".format(_水平头[level]),
     ]
-    for entry in items:
+    for entry in entries:
         lines.append(
-            "     · {0} —— {1}，{2}".format(_label(entry, False), entry["direction"], entry["grade"])
+            "     · {0} —— {1}，{2}".format(_label(entry, level), entry["direction"], entry["grade"])
         )
     if subs:
         lines.append("   - 劣化子项（套 / 项 / 子项 / 方向 / 程度）：")
         for entry in subs:
             lines.append(
-                "     · {0} —— {1}，{2}".format(
-                    _label(entry, True), entry["direction"], entry["grade"]
-                )
+                "     · {0} —— {1}，{2}".format(_label(entry, _SUB), entry["direction"], entry["grade"])
             )
     lines += [
         "   请据此输出：① 本次劣化的整体特征；② 各劣化项之间可能的共性原因；",
@@ -250,17 +274,18 @@ def _prompt_lines(items, subs, labels, info):
     return lines
 
 
-def _结论(items, suites):
-    if not items:
+def _结论(entries, suites, level):
+    if not entries:
         return "   本次对比未发现超过阈值的劣化项，测试结果整体稳定。"
     counts = "、".join(
-        "{0} {1} 项".format(name, sum(1 for entry in items if entry["grade"] == name))
+        "{0} {1} 项".format(name, sum(1 for entry in entries if entry["grade"] == name))
         for _, name, _ in _GRADES
     )
+    unit = "个测试套" if level == _SUITE else "个测试项"
     return (
-        "   本次共发现 {0} 个测试项超过阈值的劣化，涉及 {1} 个测试套（{2}）。\n"
-        "   按严重程度：{3}。建议优先关注「严重」类问题。".format(
-            len(items), len(suites), "、".join(suites), counts
+        "   本次共发现 {0} {1}超过阈值的劣化，涉及 {2} 个测试套（{3}）。\n"
+        "   按严重程度：{4}。建议优先关注「严重」类问题。".format(
+            len(entries), unit, len(suites), "、".join(suites), counts
         )
     )
 
@@ -272,12 +297,27 @@ def _序号(number):
 # ——— HTML ———
 
 
-def _render_html(items, subs, labels, info, style):
+def _render_html(entries, subs, labels, info, style, level):
     stamp = info.get("generated_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    suites = sorted({entry["suite"] for entry in items})
+    suites = sorted({entry["suite"] for entry in entries})
     counts = [
-        (name, sum(1 for entry in items if entry["grade"] == name)) for _, name, _ in _GRADES
+        (name, sum(1 for entry in entries if entry["grade"] == name)) for _, name, _ in _GRADES
     ]
+
+    # 「各测试套劣化项数」只在展开到测试项/子项时才有意义（套级清单本身就是按套列的）
+    chart_by_suite = ""
+    if level != _SUITE:
+        chart_by_suite = """
+  <section>
+    <h2>各测试套劣化项数</h2>
+    <div class="chart">{chart}</div>
+  </section>
+""".format(
+            chart=_svg_bars(
+                [(name, number, "#2e75b6") for name, number in _counts_by_suite(entries)],
+                label_width=150,
+            )
+        )
 
     subs_section = ""
     if subs:
@@ -292,7 +332,7 @@ def _render_html(items, subs, labels, info, style):
       </tbody>
     </table>
   </section>
-""".format(rows=_table_rows(subs, with_sub_item=True))
+""".format(rows=_table_rows(subs, _SUB))
 
     return """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -347,7 +387,7 @@ def _render_html(items, subs, labels, info, style):
   </header>
 
   <div class="cards">
-    <div class="card"><div class="k">劣化项</div><div class="v">{total}</div></div>
+    <div class="card"><div class="k">{metric}</div><div class="v">{total}</div></div>
     <div class="card"><div class="k">涉及测试套</div><div class="v">{suite_count}</div></div>
     <div class="card"><div class="k">严重</div><div class="v" style="color:var(--severe)">{severe}</div></div>
     <div class="card"><div class="k">明显</div><div class="v" style="color:var(--obvious)">{obvious}</div></div>
@@ -363,16 +403,11 @@ def _render_html(items, subs, labels, info, style):
       <span><i class="dot" style="background:var(--slight)"></i>轻微（超阈值）</span>
     </div>
   </section>
-
+{chart_by_suite}
   <section>
-    <h2>各测试套劣化项数</h2>
-    <div class="chart">{chart_suite}</div>
-  </section>
-
-  <section>
-    <h2>劣化项清单</h2>
+    <h2>{list_title}</h2>
     <table>
-      <thead><tr><th style="width:56px">序号</th><th>测试套 / 测试项</th><th style="width:110px">方向</th>
+      <thead><tr><th style="width:56px">序号</th><th>{head}</th><th style="width:110px">方向</th>
       <th style="width:190px">劣化程度</th></tr></thead>
       <tbody>
 {rows}
@@ -408,38 +443,35 @@ def _render_html(items, subs, labels, info, style):
         label_a=html.escape(labels[0]),
         label_b=html.escape(labels[1]),
         threshold=html.escape(_标(info.get("threshold_pct"), "{}%")),
-        total=len(items),
+        metric=_指标名(level),
+        total=len(entries),
         suite_count=len(suites),
         severe=counts[0][1],
         obvious=counts[1][1],
         slight=counts[2][1],
         chart_grade=_svg_bars([(name, number, _GRADE_COLORS[name]) for name, number in counts]),
-        chart_suite=_svg_bars(
-            [(name, number, "#2e75b6") for name, number in _counts_by_suite(items)],
-            label_width=150,
-        ),
-        rows=_table_rows(items, with_sub_item=False),
+        chart_by_suite=chart_by_suite,
+        list_title=_清单标题(level).split("、", 1)[1],
+        head=_水平头[level],
+        rows=_table_rows(entries, level),
         subs_section=subs_section,
         kernel_a=html.escape(_标(info.get("baseline_kernel"))),
         kernel_b=html.escape(_标(info.get("candidate_kernel"))),
         stamp=html.escape(stamp),
-        prompt=html.escape("\n".join(_prompt_lines(items, subs, labels, info))),
+        prompt=html.escape("\n".join(_prompt_lines(entries, subs, labels, info, level))),
     )
 
 
-def _table_rows(entries, with_sub_item):
+def _table_rows(entries, level):
     if not entries:
         return "<tr><td colspan='4' class='empty'>本次未发现超过阈值的劣化项</td></tr>"
     rows = []
     for index, entry in enumerate(entries, 1):
-        name = _label(entry, with_sub_item)
-        if not with_sub_item and entry.get("count", 1) > 1:
-            name += "（含 {0} 个子项）".format(entry["count"])
         rows.append(
             "<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>"
             "<span class='badge g-{3}'>{4}</span>{5}</td></tr>".format(
                 index,
-                html.escape(name),
+                html.escape(_label(entry, level)),
                 html.escape(entry["direction"]),
                 _grade_slug(entry["grade"]),
                 html.escape(entry["grade"]),
