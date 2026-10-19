@@ -45,13 +45,6 @@ def _build_parser():
         help="测试报告输出前缀（可选）：写出 <前缀>.txt 与 <前缀>.html",
     )
     parser.add_argument(
-        "--report-style",
-        type=int,
-        default=2,
-        choices=(1, 2, 3),
-        help="报告版本：1=定性分级 2=区间分档（默认） 3=精确百分比",
-    )
-    parser.add_argument(
         "--summarize-subitems",
         action="store_true",
         help="在报告中总结子项（默认关闭：只列到测试项级别）",
@@ -135,13 +128,10 @@ def _run(args):
                 "baseline_commit": config.baseline.commit_id,
                 "candidate_commit": config.candidates[0].commit_id,
             },
-            style=args.report_style,
             summarize_subitems=args.summarize_subitems,
         )
         print(
-            "已写出测试报告：{0}、{1}（版本 V{2}，不含测量值）".format(
-                txt_path, html_path, args.report_style
-            )
+            "已写出测试报告：{0}、{1}（不含测量值）".format(txt_path, html_path)
         )
 
     print(

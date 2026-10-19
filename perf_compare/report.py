@@ -9,7 +9,7 @@
         也不显示「各测试套劣化项数」图表；
 - 开启：清单到「测试项」一级，并额外输出「子项劣化汇总」一节与按套的图表。
 
-`style` 只影响「劣化程度怎么表达」：1 定性 / 2 区间 / 3 精确百分比。
+劣化程度统一用**精确百分比**表达（如 25.00%）。
 系统标识里**暂不显示报告版本与 commitId**（需求方 2026-10-19）。
 """
 import datetime
@@ -20,13 +20,11 @@ import unicodedata
 TXT_SUFFIX = ".txt"
 HTML_SUFFIX = ".html"
 
-STYLE_NAMES = {1: "定性分级", 2: "区间分档", 3: "精确百分比"}
-
 # 劣化程度分档：(阈值, 名称, 区间文案)
 _GRADES = (
-    (50.0, "严重", "≥50%"),
-    (20.0, "明显", "20%~50%"),
-    (0.0, "轻微", "阈值~20%"),
+    (50.0, "严重"),
+    (20.0, "明显"),
+    (0.0, "轻微"),
 )
 _GRADE_COLORS = {"严重": "#c0392b", "明显": "#e67e22", "轻微": "#c9a227"}
 
@@ -44,83 +42,82 @@ def write_report(
     base_path,
     labels=("结果A", "结果B"),
     info=None,
-    style=3,
     summarize_subitems=False,
 ):
     """写出 `<base_path>.txt` 与 `<base_path>.html`，返回 (txt 路径, html 路径)。"""
-    if style not in STYLE_NAMES:
-        raise ValueError("未知的报告版本：{0!r}（可选 1/2/3）".format(style))
     labels = tuple(labels)
     info = dict(info or {})
     info.setdefault("compared_suites", len({row.suite for row in comparison.rows()}))
 
     if summarize_subitems:
         level = _ITEM
-        entries = _item_findings(comparison, style)
-        subs = _subitem_findings(comparison, style)
+        entries = _item_findings(comparison)
+        subs = _subitem_findings(comparison)
     else:
         level = _SUITE
-        entries = _suite_findings(comparison, style)
+        entries = _suite_findings(comparison)
         subs = []
 
     txt_path = base_path + TXT_SUFFIX
     html_path = base_path + HTML_SUFFIX
     _确保父目录存在(txt_path)
     with open(txt_path, "w", encoding="utf-8") as handle:
-        handle.write(_render_txt(entries, subs, labels, info, style, level))
+        handle.write(_render_txt(entries, subs, labels, info, level))
     with open(html_path, "w", encoding="utf-8") as handle:
-        handle.write(_render_html(entries, subs, labels, info, style, level))
+        handle.write(_render_html(entries, subs, labels, info, level))
     return txt_path, html_path
 
 
 # ——— 结论条目 ———
 
 
-def _entry(row, style):
-    magnitude = _magnitude(row)
-    grade, band = _grade(magnitude)
+def _entry(row):
+    # 分级与显示必须用**同一个**四舍五入后的幅度：否则 19.999999999999996 会显示成
+    # 20.00% 却被判「轻微」（20% 本应属「明显」），结论与显示自相矛盾。
+    magnitude = round(_magnitude(row), 2)
+    grade = _grade(magnitude)
     return {
         "suite": row.suite,
         "item": row.item,
         "sub_item": row.sub_item,
         "direction": "时延增大" if not row.higher_is_better else "指标下降",
         "grade": grade,
-        "amount": _amount(magnitude, style, band),
+        "amount": _amount(magnitude),
         "magnitude": magnitude,
     }
 
 
-def _suite_findings(comparison, style):
+def _suite_findings(comparison):
     """按测试套聚合（开关关闭时的粒度，等同汇总表那一栏）。"""
     worst = {}
     for row in comparison.rows():
         if not row.degraded:
             continue
-        entry = _entry(row, style)
+        entry = _entry(row)
         if entry["suite"] not in worst or entry["magnitude"] > worst[entry["suite"]]["magnitude"]:
             worst[entry["suite"]] = entry
     return _sorted(worst.values())
 
 
-def _item_findings(comparison, style):
+def _item_findings(comparison):
     """按「测试套 + 测试项」聚合。"""
     worst = {}
     for row in comparison.rows():
         if not row.degraded:
             continue
-        entry = _entry(row, style)
+        entry = _entry(row)
         key = (entry["suite"], entry["item"])
         if key not in worst or entry["magnitude"] > worst[key]["magnitude"]:
             worst[key] = entry
     return _sorted(worst.values())
 
 
-def _subitem_findings(comparison, style):
+def _subitem_findings(comparison):
     found = {}
     for row in comparison.rows():
         if not row.degraded:
             continue
-        entry = _entry(row, style)
+        entry = _entry(row)
         found[(entry["suite"], entry["item"], entry["sub_item"])] = entry
     return _sorted(found.values())
 
@@ -139,17 +136,14 @@ def _magnitude(row):
 
 
 def _grade(magnitude):
-    for limit, name, band in _GRADES:
+    for limit, name in _GRADES:
         if magnitude >= limit:
-            return name, band
-    return _GRADES[-1][0], _GRADES[-1][1]
+            return name
+    return _GRADES[-1][1]
 
 
-def _amount(magnitude, style, band):
-    if style == 1:
-        return ""
-    if style == 2:
-        return band
+def _amount(magnitude):
+    """劣化程度的量化表述：统一给精确百分比。"""
     return "{0:.2f}%".format(magnitude)
 
 
@@ -176,7 +170,7 @@ def _指标名(level):
 # ——— TXT ———
 
 
-def _render_txt(entries, subs, labels, info, style, level):
+def _render_txt(entries, subs, labels, info, level):
     stamp = info.get("generated_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     suites = sorted({entry["suite"] for entry in entries})
 
@@ -279,13 +273,19 @@ def _结论(entries, suites, level):
         return "   本次对比未发现超过阈值的劣化项，测试结果整体稳定。"
     counts = "、".join(
         "{0} {1} 项".format(name, sum(1 for entry in entries if entry["grade"] == name))
-        for _, name, _ in _GRADES
+        for _, name in _GRADES
     )
-    unit = "个测试套" if level == _SUITE else "个测试项"
+    if level == _SUITE:
+        return (
+            "   本次共发现 {0} 个测试套存在超过阈值的劣化（{1}）。\n"
+            "   按严重程度：{2}。建议优先关注「严重」类问题。".format(
+                len(entries), "、".join(suites), counts
+            )
+        )
     return (
-        "   本次共发现 {0} {1}超过阈值的劣化，涉及 {2} 个测试套（{3}）。\n"
-        "   按严重程度：{4}。建议优先关注「严重」类问题。".format(
-            len(entries), unit, len(suites), "、".join(suites), counts
+        "   本次共发现 {0} 个测试项超过阈值的劣化，涉及 {1} 个测试套（{2}）。\n"
+        "   按严重程度：{3}。建议优先关注「严重」类问题。".format(
+            len(entries), len(suites), "、".join(suites), counts
         )
     )
 
@@ -297,11 +297,11 @@ def _序号(number):
 # ——— HTML ———
 
 
-def _render_html(entries, subs, labels, info, style, level):
+def _render_html(entries, subs, labels, info, level):
     stamp = info.get("generated_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     suites = sorted({entry["suite"] for entry in entries})
     counts = [
-        (name, sum(1 for entry in entries if entry["grade"] == name)) for _, name, _ in _GRADES
+        (name, sum(1 for entry in entries if entry["grade"] == name)) for _, name in _GRADES
     ]
 
     # 「各测试套劣化项数」只在展开到测试项/子项时才有意义（套级清单本身就是按套列的）

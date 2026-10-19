@@ -1,4 +1,4 @@
-"""测试报告：结构完整、三版本差异正确，且**绝不泄露具体测量值**（这份报告对外公开）。"""
+"""测试报告：结构完整、粒度正确，且**绝不泄露具体测量值**（这份报告对外公开）。"""
 import shutil
 from pathlib import Path
 
@@ -46,7 +46,7 @@ def test_报告不含任何具体测量值(tmp_path):
     comparison = _造比较(tmp_path, {1: 0.40, 2: 0.75})
 
     txt_path, html_path = write_report(
-        comparison, str(tmp_path / "报告"), labels=("基线X", "对比Y"), info=INFO, style=3
+        comparison, str(tmp_path / "报告"), labels=("基线X", "对比Y"), info=INFO
     )
     txt = Path(txt_path).read_text(encoding="utf-8")
     page = Path(html_path).read_text(encoding="utf-8")
@@ -63,30 +63,27 @@ def test_报告不含任何具体测量值(tmp_path):
     assert leaked == []
 
 
-def test_三个版本的劣化程度表述不同(tmp_path):
-    """V1 只有定性分级；V2 给区间；V3 给精确百分比。"""
-    comparison = _造比较(tmp_path, {1: 0.40, 2: 0.75})   # -60%（严重）、-25%（明显）
+def test_劣化程度用精确百分比(tmp_path):
+    """劣化程度统一给精确百分比（不再有多种版本）。
 
-    texts = {}
-    for style in (1, 2, 3):
-        txt_path, _ = write_report(
-            comparison, str(tmp_path / "报告{0}".format(style)), info=INFO, style=style
-        )
-        texts[style] = Path(txt_path).read_text(encoding="utf-8")
+    用子项明细（开关打开）验证两种幅度：-60% 判严重、-25% 判明显。
+    """
+    comparison = _造比较(tmp_path, {1: 0.40, 2: 0.75})
 
-    assert "严重" in texts[1] and "明显" in texts[1]
-    # 定性版：程度列不该带括号里的量化（说明段里出现阈值文案是正常的）
-    assert "严重（" not in texts[1] and "明显（" not in texts[1]
-    assert "严重（≥50%）" in texts[2]              # 分档版给区间
-    assert "60.00%" not in texts[2]                # 但不会给精确值
-    assert "60.00%" in texts[3]                    # 精确版给百分比
+    txt_path, _ = write_report(
+        comparison, str(tmp_path / "报告"), info=INFO, summarize_subitems=True
+    )
+    text = Path(txt_path).read_text(encoding="utf-8")
+
+    assert "严重（60.00%）" in text
+    assert "明显（25.00%）" in text
 
 
 def test_html_带可视化图表与系统标识(tmp_path):
     comparison = _造比较(tmp_path, {1: 0.40})
 
     _, html_path = write_report(
-        comparison, str(tmp_path / "报告"), labels=("基线X", "对比Y"), info=INFO, style=2
+        comparison, str(tmp_path / "报告"), labels=("基线X", "对比Y"), info=INFO
     )
     page = Path(html_path).read_text(encoding="utf-8")
 
@@ -100,55 +97,61 @@ def test_html_带可视化图表与系统标识(tmp_path):
 
 
 def test_默认不展开子项_开启后才总结子项(tmp_path):
-    """需求方 2026-10-19：是否总结子项由开关控制，**默认关闭**。
+    """是否总结子项由开关控制，**默认关闭**（需求方 2026-10-19）。
 
-    关闭时报告只到「测试套 / 测试项」，子项名不出现；开启后额外给出「子项劣化汇总」。
+    关闭时粒度退到「测试套」：连测试项名都不出现，也没有按套的图表；
+    开启后清单到测试项，并额外给出「子项劣化汇总」。
     """
     comparison = _造比较(tmp_path, {1: 0.40, 2: 0.75})   # 同一测试项下两个子项劣化
 
-    default_txt, default_html = write_report(
-        comparison, str(tmp_path / "默认"), info=INFO, style=2
-    )
+    default_txt, default_html = write_report(comparison, str(tmp_path / "默认"), info=INFO)
     default = Path(default_txt).read_text(encoding="utf-8")
-    # 关闭时粒度退到「测试套」：连测试项名都不出现（需求方 2026-10-19）
     assert "fio" in default
-    assert "read_iops_blocksize" not in default
-    assert "blocksize-4k" not in default
+    assert "read_iops_blocksize" not in default       # 测试项名不出现
+    assert "blocksize-4k" not in default              # 子项名不出现
     assert "子项劣化汇总" not in default
     assert "个子项" not in default                    # 不再提示子项个数
     assert "各测试套劣化项数" not in Path(default_html).read_text(encoding="utf-8")
 
     opened_txt, opened_html = write_report(
-        comparison, str(tmp_path / "开启"), info=INFO, style=2, summarize_subitems=True
+        comparison, str(tmp_path / "开启"), info=INFO, summarize_subitems=True
     )
     opened = Path(opened_txt).read_text(encoding="utf-8")
     assert "子项劣化汇总" in opened
+    assert "read_iops_blocksize" in opened
     assert "blocksize-4k" in opened and "blocksize-16k" in opened
-    assert "子项劣化汇总" in Path(opened_html).read_text(encoding="utf-8")
+    opened_page = Path(opened_html).read_text(encoding="utf-8")
+    assert "子项劣化汇总" in opened_page and "各测试套劣化项数" in opened_page
 
 
-def test_区间分档必须覆盖实际幅度(tmp_path):
-    """劣化 35% 应落在「20%~50%」档，而不是「10%~30%」。
+def test_分级按显示精度判定(tmp_path):
+    """浮点误差 19.999999999999996 会显示成 20.00%，此时必须判「明显」而非「轻微」。
 
-    此前分档文案是手写死的、与阈值不一致：35% 被判为「明显」，文案却写 10%~30%，
-    自相矛盾（V2 与 V3 对照时暴露）。
+    分级与显示若用不同精度，就会出现「显示 20.00% 却是轻微」的自相矛盾。
     """
-    comparison = _造比较(tmp_path, {1: 0.65})   # -35%
+    for side, value in (("baseline", "1000"), ("candidate", "800.0000000000001")):
+        target = tmp_path / side / "基础性能测试"
+        target.mkdir(parents=True)
+        (target / "fio.txt").write_text(
+            "read_iops_blocksize 边界\naverage {0}\nvariance 0.0\n".format(value),
+            encoding="utf-8",
+        )
+    comparison = compare(
+        load(str(tmp_path / "baseline")), load(str(tmp_path / "candidate")), threshold_pct=5.0
+    )
 
-    txt_path, _ = write_report(comparison, str(tmp_path / "r2"), info=INFO, style=2)
+    txt_path, _ = write_report(comparison, str(tmp_path / "报告"), info=INFO, summarize_subitems=True)
+
     text = Path(txt_path).read_text(encoding="utf-8")
-
-    assert "明显（20%~50%）" in text
-    assert "10%~30%" not in text            # 旧文案已废弃
-    txt_v3, _ = write_report(comparison, str(tmp_path / "r3"), info=INFO, style=3)
-    assert "35.00%" in Path(txt_v3).read_text(encoding="utf-8")
+    assert "明显（20.00%）" in text
+    assert "轻微（20.00%）" not in text
 
 
 def test_无劣化时也能出报告(tmp_path):
     """两次相同数据 → 报告应写明「未发现劣化」，而不是空白或报错。"""
     comparison = _造比较(tmp_path, {})
 
-    txt_path, html_path = write_report(comparison, str(tmp_path / "报告"), info=INFO, style=2)
+    txt_path, html_path = write_report(comparison, str(tmp_path / "报告"), info=INFO)
 
     assert "未发现" in Path(txt_path).read_text(encoding="utf-8")
     assert "无劣化项" in Path(html_path).read_text(encoding="utf-8")
