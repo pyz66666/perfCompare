@@ -59,6 +59,8 @@ def _run(args):
 
     baseline_path = config.baseline.path
     candidate_path = config.candidates[0].path
+    # 两侧是同一个目录时，结果必然全为 0 —— 那是最危险的假结论（看起来「毫无劣化」）。
+    _同一个目录(baseline_path, candidate_path)
     baseline, baseline_report = load_with_report(baseline_path)
     candidate, candidate_report = load_with_report(candidate_path)
 
@@ -87,6 +89,12 @@ def _run(args):
             "只在一侧出现、未纳入对比的测试套：{0}（只比对两侧都包含的套）".format(excluded)
         )
 
+    # 两侧数据一模一样（拷贝、或路径填成同一处）时，全 0 的表会被误读成「没有劣化」。
+    if all(row.pct in (0, None) for row in rows):
+        print(
+            "    ⚠ 两侧数据完全一致（所有子项差距都是 0）—— 请确认两个 path 是否指向了同一份数据。"
+        )
+
     write_excel(
         comparison,
         args.excel,
@@ -107,6 +115,15 @@ def _run(args):
         )
     )
     return 0
+
+
+def _同一个目录(baseline_path, candidate_path):
+    """两侧解析到同一个真实目录时告警（含末尾斜杠、相对路径等写法差异）。"""
+    if os.path.realpath(baseline_path) == os.path.realpath(candidate_path):
+        print(
+            "    ⚠ 基线与对比指向**同一个目录**（{0}），结果必然全为 0 —— 请检查配置里的两个 path。"
+            .format(baseline_path)
+        )
 
 
 def _显示名(config):

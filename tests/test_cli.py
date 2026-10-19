@@ -209,8 +209,62 @@ def test_命令行_无效结果给出告警(tmp_path, capsys):
     assert exit_code == 0
     warned = [line for line in output.splitlines() if line.startswith("    ⚠")]
     assert warned, "实际输出为：\n" + output
-    assert "INVALID RUN" in warned[0]
-    assert "speccpu2017_int_single" in warned[0]
+    # 断言按内容匹配而不是取第一条：该用例两侧同目录，会先打印「同一个目录」告警。
+    invalid_lines = [line for line in warned if "INVALID RUN" in line]
+    assert invalid_lines, "实际输出为：\n" + output
+    assert "speccpu2017_int_single" in invalid_lines[0]
+
+
+def test_命令行_两侧指向同一个目录时告警(tmp_path, capsys):
+    """把同一份数据同时当基线和对比，结果必然全为 0 —— 必须明确告警。
+
+    否则用户看到一张全 0 的表，会误以为「没有任何劣化」，这是假结论。
+    """
+    result_dir = tmp_path / "结果"
+    result_dir.mkdir()
+    shutil.copy(str(FIXTURE / "基础性能测试" / "fio.txt"), str(result_dir / "fio.txt"))
+    config_path = _写配置(tmp_path, result_dir, result_dir)
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--excel",
+            str(tmp_path / "对比表格.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    warnings = [line for line in output.splitlines() if line.startswith("    ⚠")]
+    assert any("同一个目录" in line for line in warnings), "实际输出为：\n" + output
+
+
+def test_命令行_两侧数据完全一致时告警(tmp_path, capsys):
+    """两个不同目录、内容却一模一样的拷贝 —— 同样应当告警。"""
+    for side in ("base", "copy"):
+        target = tmp_path / side / "基础性能测试"
+        target.mkdir(parents=True)
+        shutil.copy(str(FIXTURE / "基础性能测试" / "fio.txt"), str(target / "fio.txt"))
+    config_path = _写配置(tmp_path, tmp_path / "base", tmp_path / "copy")
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--excel",
+            str(tmp_path / "对比表格.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    warnings = [line for line in output.splitlines() if line.startswith("    ⚠")]
+    assert any("完全一致" in line for line in warnings), "实际输出为：\n" + output
 
 
 def test_命令行_报告被排除的测试套(tmp_path, capsys):
