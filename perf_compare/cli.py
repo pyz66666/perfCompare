@@ -116,6 +116,15 @@ def _run(args):
             "excluded_suites": excluded,
         },
     )
+    print(
+        "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(
+            args.excel,
+            len(rows),
+            sum(1 for row in rows if row.baseline is None or row.candidate is None),
+            sum(1 for row in rows if row.degraded),
+        )
+    )
+
     if args.report:
         txt_path, html_path = write_report(
             comparison,
@@ -134,14 +143,6 @@ def _run(args):
             "已写出测试报告：{0}、{1}（不含测量值）".format(txt_path, html_path)
         )
 
-    print(
-        "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(
-            args.excel,
-            len(rows),
-            sum(1 for row in rows if row.baseline is None or row.candidate is None),
-            sum(1 for row in rows if row.degraded),
-        )
-    )
     return 0
 
 
