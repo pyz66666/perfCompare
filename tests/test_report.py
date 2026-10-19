@@ -91,7 +91,32 @@ def test_html_带可视化图表与系统标识(tmp_path):
     assert "<svg" in page                 # 内联图表，不依赖外部资源（内网可用）
     assert "http://" not in page and "https://" not in page
     assert "基线X" in page and "对比Y" in page
-    assert "6.6.0-72.3.0" in page and "bbb2222" in page   # 两侧内核版本与 commitId
+    assert "6.6.0-72.3.0" in page                  # 内核版本保留
+    # 需求变更（2026-10-19）：系统标识里暂时隐藏 commitId 与报告版本
+    assert "bbb2222" not in page and "aaa1111" not in page
+    assert "CommitId" not in page and "报告版本" not in page
+
+
+def test_默认不展开子项_开启后才总结子项(tmp_path):
+    """需求方 2026-10-19：是否总结子项由开关控制，**默认关闭**。
+
+    关闭时报告只到「测试套 / 测试项」，子项名不出现；开启后额外给出「子项劣化汇总」。
+    """
+    comparison = _造比较(tmp_path, {1: 0.40, 2: 0.75})   # 同一测试项下两个子项劣化
+
+    default_txt, _ = write_report(comparison, str(tmp_path / "默认"), info=INFO, style=2)
+    default = Path(default_txt).read_text(encoding="utf-8")
+    assert "read_iops_blocksize" in default          # 测试项在
+    assert "blocksize-4k" not in default             # 子项名不出现（默认关闭）
+    assert "子项劣化汇总" not in default
+
+    opened_txt, opened_html = write_report(
+        comparison, str(tmp_path / "开启"), info=INFO, style=2, summarize_subitems=True
+    )
+    opened = Path(opened_txt).read_text(encoding="utf-8")
+    assert "子项劣化汇总" in opened
+    assert "blocksize-4k" in opened and "blocksize-16k" in opened
+    assert "子项劣化汇总" in Path(opened_html).read_text(encoding="utf-8")
 
 
 def test_无劣化时也能出报告(tmp_path):

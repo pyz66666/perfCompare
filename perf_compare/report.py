@@ -1,14 +1,19 @@
 """测试报告输出（txt + html）。
 
 **硬性约束：报告里不得出现任何具体测量值**（这份报告对外公开）。
-因此本模块只使用「劣化项名称 / 子项 / 劣化程度 / 系统标识」，绝不读写 `Row.baseline`、
-`Row.candidate` 的数值 —— 唯一例外是 `pct`（差距百分比本身是分析结论，不是原始测量值），
-且仅在 `style=3` 时以百分比形式出现。
+本模块只使用「劣化项名称 / 子项 / 方向 / 劣化程度」，绝不读写 `Row.baseline`、`Row.candidate`
+的数值 —— 唯一例外是 `pct`（差距百分比本身是分析结论，不是原始测量值）。
 
 三个版本（`style`）的区别只在「劣化程度怎么表达」：
 - 1 定性   ：严重 / 明显 / 轻微
 - 2 分档   ：5%~10% / 10%~30% / >30%
 - 3 精确   ：带符号的百分比
+
+子项是否展开由 `summarize_subitems` 控制（**默认关闭**）：
+- 关闭：劣化项清单只列到「测试套 / 测试项」，**不出现子项名**；
+- 开启：额外输出一节「子项劣化汇总」，逐个列出劣化子项。
+
+系统标识里**暂不显示报告版本与 commitId**（需求方 2026-10-19）。
 """
 import datetime
 import html
@@ -26,52 +31,88 @@ _GRADES = (
     (20.0, "明显", "10%~30%"),
     (0.0, "轻微", "5%~10%"),
 )
+_GRADE_COLORS = {"严重": "#c0392b", "明显": "#e67e22", "轻微": "#c9a227"}
 
 
-def write_report(comparison, base_path, labels=("结果A", "结果B"), info=None, style=3):
-    """写出 `<base_path>.txt` 与 `<base_path>.html`，返回 (txt 路径, html 路径)。
-
-    `info` 可含：`threshold_pct`、`baseline_kernel`、`candidate_kernel`、
-    `baseline_commit`、`candidate_commit`、`generated_at`。
-    """
+def write_report(
+    comparison,
+    base_path,
+    labels=("结果A", "结果B"),
+    info=None,
+    style=3,
+    summarize_subitems=False,
+):
+    """写出 `<base_path>.txt` 与 `<base_path>.html`，返回 (txt 路径, html 路径)。"""
     if style not in STYLE_NAMES:
         raise ValueError("未知的报告版本：{0!r}（可选 1/2/3）".format(style))
     labels = tuple(labels)
     info = dict(info or {})
     info.setdefault("compared_suites", len({row.suite for row in comparison.rows()}))
-    findings = _findings(comparison, info.get("threshold_pct"), style)
 
-    txt = _render_txt(findings, labels, info, style)
-    page = _render_html(findings, labels, info, style)
+    items = _item_findings(comparison, style)
+    subs = _subitem_findings(comparison, style) if summarize_subitems else []
 
     txt_path = base_path + TXT_SUFFIX
     html_path = base_path + HTML_SUFFIX
     _确保父目录存在(txt_path)
     with open(txt_path, "w", encoding="utf-8") as handle:
-        handle.write(txt)
+        handle.write(_render_txt(items, subs, labels, info, style))
     with open(html_path, "w", encoding="utf-8") as handle:
-        handle.write(page)
+        handle.write(_render_html(items, subs, labels, info, style))
     return txt_path, html_path
 
 
-def _findings(comparison, threshold_pct, style):
-    """把劣化子项整理成报告用的条目（**不含任何测量值**）。"""
-    found = []
+# ——— 结论条目 ———
+
+
+def _entry(row, style):
+    magnitude = _magnitude(row)
+    grade, band = _grade(magnitude)
+    return {
+        "suite": row.suite,
+        "item": row.item,
+        "sub_item": row.sub_item,
+        "direction": "时延增大" if not row.higher_is_better else "指标下降",
+        "grade": grade,
+        "amount": _amount(magnitude, style, band),
+        "magnitude": magnitude,
+    }
+
+
+def _item_findings(comparison, style):
+    """按「测试套 + 测试项」聚合的劣化（默认报告只用这一层，不暴露子项名）。"""
+    worst = {}
     for row in comparison.rows():
         if not row.degraded:
             continue
-        magnitude = _magnitude(row)
-        found.append(
-            {
-                "suite": row.suite,
-                "name": row.item if not row.sub_item else "{0} / {1}".format(row.item, row.sub_item),
-                "direction": "时延增大" if not row.higher_is_better else "指标下降",
-                "grade": _grade(magnitude)[0],
-                "amount": _amount(magnitude, style),
-            }
-        )
-    found.sort(key=lambda item: (not item["grade"] == "严重", item["grade"], item["suite"]))
-    return found
+        entry = _entry(row, style)
+        key = (entry["suite"], entry["item"])
+        if key not in worst:
+            entry["count"] = 1
+            worst[key] = entry
+        else:
+            worst[key]["count"] += 1
+            if entry["magnitude"] > worst[key]["magnitude"]:
+                count = worst[key]["count"]
+                worst[key] = entry
+                worst[key]["count"] = count
+    return _sorted(worst.values())
+
+
+def _subitem_findings(comparison, style):
+    found = {}
+    for row in comparison.rows():
+        if not row.degraded:
+            continue
+        entry = _entry(row, style)
+        found[(entry["suite"], entry["item"], entry["sub_item"])] = entry
+    return _sorted(found.values())
+
+
+def _sorted(entries):
+    return sorted(
+        entries, key=lambda entry: (-entry["magnitude"], entry["suite"], entry["item"])
+    )
 
 
 def _magnitude(row):
@@ -88,135 +129,170 @@ def _grade(magnitude):
     return _GRADES[-1][0], _GRADES[-1][1]
 
 
-def _amount(magnitude, style):
-    """按版本给出「劣化程度」的表述 —— 只有它能携带量化信息。"""
+def _amount(magnitude, style, band):
     if style == 1:
         return ""
     if style == 2:
-        return _grade(magnitude)[1]
+        return band
     return "{0:.2f}%".format(magnitude)
 
 
-def _render_txt(findings, labels, info, style):
-    threshold = info.get("threshold_pct")
+def _label(entry, with_sub_item):
+    if with_sub_item and entry["sub_item"]:
+        return "{0} / {1} / {2}".format(entry["suite"], entry["item"], entry["sub_item"])
+    return "{0} / {1}".format(entry["suite"], entry["item"])
+
+
+def _degree(entry):
+    return entry["grade"] + ("（{0}）".format(entry["amount"]) if entry["amount"] else "")
+
+
+# ——— TXT ———
+
+
+def _render_txt(items, subs, labels, info, style):
     stamp = info.get("generated_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    suites = sorted({item["suite"] for item in findings})
-    counts = _counts_by_grade(findings)
+    suites = sorted({entry["suite"] for entry in items})
 
     lines = [
         "性能测试结果对比报告",
         "=" * 24,
         "",
         "对比对象：{0}（基线） vs {1}（对比）".format(labels[0], labels[1]),
-        "内核版本：{0} / {1}".format(_标(info.get("baseline_kernel")), _标(info.get("candidate_kernel"))),
-        "CommitId：{0} / {1}".format(_标(info.get("baseline_commit")), _标(info.get("candidate_commit"))),
-        "劣化阈值：{0}".format(_标(threshold, "{}%")),
-        "报告版本：{0}（{1}）".format(style, STYLE_NAMES[style]),
+        "内核版本：{0} / {1}".format(
+            _标(info.get("baseline_kernel")), _标(info.get("candidate_kernel"))
+        ),
+        "劣化阈值：{0}".format(_标(info.get("threshold_pct"), "{}%")),
         "生成时间：{0}".format(stamp),
         "",
         "一、总体结论",
         "",
-        _结论(findings, suites, counts, style),
+        _结论(items, suites),
         "",
         "二、劣化项清单",
         "",
     ]
-    if not findings:
-        lines.append("   本次未发现超过阈值的劣化项。")
-    else:
-        lines.append(
-            "   {0}{1}{2}{3}".format(
-                _补齐("序号", 6), _补齐("测试套 / 测试项", 46), _补齐("方向", 12), "劣化程度"
-            )
-        )
-        lines.append("   " + "-" * 76)
-        for index, item in enumerate(findings, 1):
-            amount = item["amount"]
-            lines.append(
-                "   {0}{1}{2}{3}".format(
-                    _补齐(str(index), 6),
-                    _补齐(_截断("{0} / {1}".format(item["suite"], item["name"]), 44), 46),
-                    _补齐(item["direction"], 12),
-                    item["grade"] + ("（{0}）".format(amount) if amount else ""),
-                )
-            )
-    lines.extend(
-        [
-            "",
-            "三、说明",
-            "",
-            "   1. 本报告**不含任何具体测量值**，仅给出对比结论与劣化程度，可直接对外使用。",
-            "   2. 劣化程度按「往变差方向的幅度」分级：严重 ≥50%，明显 ≥20%，轻微 >阈值。",
-            "   3. 判定只针对两侧都包含的测试套；某项的劣化可能在套级被平均摊薄，",
-            "      因此本报告以子项级结论为准。",
-            "   4. 汇总口径逐套不同（部分取测试工具自带的汇总值），详见项目文档。",
-            "",
-            "四、分析提示词（可直接交给大模型继续分析）",
-            "",
-            "   你是一名性能工程专家。以下是某次性能测试的对比结论（数据已脱敏，不含测量值）：",
-            "   - 对比对象：{0}（基线） vs {1}（对比）".format(labels[0], labels[1]),
-            "   - 劣化阈值：{0}".format(_标(threshold, "{}%")),
-            "   - 判定结果：共比对 {0} 个测试套，其中 {1} 个套出现劣化，合计 {2} 项。".format(
-                info.get("compared_suites"), len(suites), len(findings)
-            ),
-            "   - 劣化项（套 / 项 / 方向 / 程度）：",
-        ]
-    )
-    for item in findings:
-        lines.append(
-            "     · {0} / {1} —— {2}，{3}".format(item["suite"], item["name"], item["direction"], item["grade"])
-        )
-    lines.extend(
-        [
-            "   请据此输出：① 本次劣化的整体特征；② 各劣化项之间可能的共性原因；",
-            "   ③ 按影响面与严重程度排序的排查优先级；④ 建议的验证与回归方式。",
-            "   注意：不要编造任何具体测量数值。",
-            "",
-        ]
-    )
+    lines += _txt_table(items, with_sub_item=False) if items else ["   本次未发现超过阈值的劣化项。"]
+
+    section = 3
+    if subs:
+        lines += ["", "{0}、子项劣化汇总".format(_序号(section)), ""]
+        lines += _txt_table(subs, with_sub_item=True)
+        section += 1
+
+    lines += [
+        "",
+        "{0}、说明".format(_序号(section)),
+        "",
+        "   1. 本报告**不含任何具体测量值**，仅给出对比结论与劣化程度，可直接对外使用。",
+        "   2. 劣化程度按「往变差方向的幅度」分级：严重 ≥50%，明显 ≥20%，轻微 > 阈值。",
+        "   3. 判定只针对两侧都包含的测试套；某项的劣化可能在套级被平均摊薄，",
+        "      因此本报告以子项级结论为准。",
+        "   4. 汇总口径逐套不同（部分取测试工具自带的汇总值），详见项目文档。",
+    ]
+    section += 1
+
+    lines += ["", "{0}、分析提示词（可直接交给大模型继续分析）".format(_序号(section)), ""]
+    lines += _prompt_lines(items, subs, labels, info)
+    lines.append("")
     return "\n".join(lines)
 
 
-def _结论(findings, suites, counts, style):
-    if not findings:
+def _txt_table(entries, with_sub_item):
+    rows = [
+        "   {0}{1}{2}劣化程度".format(
+            _补齐("序号", 6), _补齐("测试套 / 测试项", 46), _补齐("方向", 12)
+        ),
+        "   " + "-" * 76,
+    ]
+    for index, entry in enumerate(entries, 1):
+        name = _label(entry, with_sub_item)
+        if not with_sub_item and entry.get("count", 1) > 1:
+            name += "（含 {0} 个子项）".format(entry["count"])
+        rows.append(
+            "   {0}{1}{2}{3}".format(
+                _补齐(str(index), 6),
+                _补齐(_截断(name, 44), 46),
+                _补齐(entry["direction"], 12),
+                _degree(entry),
+            )
+        )
+    return rows
+
+
+def _prompt_lines(items, subs, labels, info):
+    lines = [
+        "   你是一名性能工程专家。以下是某次性能测试的对比结论（数据已脱敏，不含测量值）：",
+        "   - 对比对象：{0}（基线） vs {1}（对比）".format(labels[0], labels[1]),
+        "   - 劣化阈值：{0}".format(_标(info.get("threshold_pct"), "{}%")),
+        "   - 判定结果：共比对 {0} 个测试套，其中 {1} 个套出现劣化，合计 {2} 个测试项。".format(
+            info.get("compared_suites"), len({entry["suite"] for entry in items}), len(items)
+        ),
+        "   - 劣化项（套 / 项 / 方向 / 程度）：",
+    ]
+    for entry in items:
+        lines.append(
+            "     · {0} —— {1}，{2}".format(_label(entry, False), entry["direction"], entry["grade"])
+        )
+    if subs:
+        lines.append("   - 劣化子项（套 / 项 / 子项 / 方向 / 程度）：")
+        for entry in subs:
+            lines.append(
+                "     · {0} —— {1}，{2}".format(
+                    _label(entry, True), entry["direction"], entry["grade"]
+                )
+            )
+    lines += [
+        "   请据此输出：① 本次劣化的整体特征；② 各劣化项之间可能的共性原因；",
+        "   ③ 按影响面与严重程度排序的排查优先级；④ 建议的验证与回归方式。",
+        "   注意：不要编造任何具体测量数值。",
+    ]
+    return lines
+
+
+def _结论(items, suites):
+    if not items:
         return "   本次对比未发现超过阈值的劣化项，测试结果整体稳定。"
-    detail = "、".join("{0} {1} 项".format(name, number) for name, number in counts if number)
+    counts = "、".join(
+        "{0} {1} 项".format(name, sum(1 for entry in items if entry["grade"] == name))
+        for _, name, _ in _GRADES
+    )
     return (
-        "   本次共发现 {0} 项超过阈值的劣化，涉及 {1} 个测试套（{2}）。\n"
+        "   本次共发现 {0} 个测试项超过阈值的劣化，涉及 {1} 个测试套（{2}）。\n"
         "   按严重程度：{3}。建议优先关注「严重」类问题。".format(
-            len(findings), len(suites), "、".join(suites), detail
+            len(items), len(suites), "、".join(suites), counts
         )
     )
 
 
-def _counts_by_grade(findings):
-    order = ["严重", "明显", "轻微"]
-    return [(name, sum(1 for item in findings if item["grade"] == name)) for name in order]
+def _序号(number):
+    return {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六"}.get(number, str(number))
 
 
-def _render_html(findings, labels, info, style):
-    threshold = info.get("threshold_pct")
+# ——— HTML ———
+
+
+def _render_html(items, subs, labels, info, style):
     stamp = info.get("generated_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    suites = sorted({item["suite"] for item in findings})
-    counts = _counts_by_grade(findings)
-    by_suite = _counts_by_suite(findings)
+    suites = sorted({entry["suite"] for entry in items})
+    counts = [
+        (name, sum(1 for entry in items if entry["grade"] == name)) for _, name, _ in _GRADES
+    ]
 
-    rows_html = "\n".join(
-        [
-            "<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>"
-            "<span class='badge g-{3}'>{4}</span>{5}</td></tr>".format(
-                index,
-                html.escape("{0} / {1}".format(item["suite"], item["name"])),
-                html.escape(item["direction"]),
-                _grade_slug(item["grade"]),
-                html.escape(item["grade"]),
-                " <span class='amount'>{0}</span>".format(html.escape(item["amount"]))
-                if item["amount"]
-                else "",
-            )
-            for index, item in enumerate(findings, 1)
-        ]
-    ) or "<tr><td colspan='4' class='empty'>本次未发现超过阈值的劣化项</td></tr>"
+    subs_section = ""
+    if subs:
+        subs_section = """
+  <section>
+    <h2>子项劣化汇总</h2>
+    <table>
+      <thead><tr><th style="width:56px">序号</th><th>测试套 / 测试项 / 子项</th>
+      <th style="width:110px">方向</th><th style="width:190px">劣化程度</th></tr></thead>
+      <tbody>
+{rows}
+      </tbody>
+    </table>
+  </section>
+""".format(rows=_table_rows(subs, with_sub_item=True))
 
     return """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -253,8 +329,7 @@ def _render_html(findings, labels, info, style):
   .chart {{ margin:6px 0 2px; }}
   .legend {{ display:flex; gap:18px; flex-wrap:wrap; color:var(--muted); font-size:13px; margin-top:8px; }}
   .dot {{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }}
-  .meta {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px 24px;
-           font-size:14px; }}
+  .meta {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px 24px; font-size:14px; }}
   .meta div {{ display:flex; gap:8px; }}
   .meta .k {{ color:var(--muted); min-width:76px; }}
   details {{ margin-top:6px; }}
@@ -304,14 +379,12 @@ def _render_html(findings, labels, info, style):
       </tbody>
     </table>
   </section>
-
+{subs_section}
   <section>
     <h2>系统标识</h2>
     <div class="meta">
       <div><span class="k">内核版本</span><span>{kernel_a} / {kernel_b}</span></div>
-      <div><span class="k">CommitId</span><span>{commit_a} / {commit_b}</span></div>
       <div><span class="k">劣化阈值</span><span>{threshold}</span></div>
-      <div><span class="k">报告版本</span><span>V{style} · {style_name}</span></div>
       <div><span class="k">生成时间</span><span>{stamp}</span></div>
     </div>
   </section>
@@ -332,39 +405,60 @@ def _render_html(findings, labels, info, style):
 </body>
 </html>
 """.format(
-        style=style,
-        style_name=STYLE_NAMES[style],
         label_a=html.escape(labels[0]),
         label_b=html.escape(labels[1]),
-        threshold=html.escape(_标(threshold, "{}%")),
-        total=len(findings),
+        threshold=html.escape(_标(info.get("threshold_pct"), "{}%")),
+        total=len(items),
         suite_count=len(suites),
         severe=counts[0][1],
         obvious=counts[1][1],
         slight=counts[2][1],
         chart_grade=_svg_bars([(name, number, _GRADE_COLORS[name]) for name, number in counts]),
         chart_suite=_svg_bars(
-            [(name, number, "#2e75b6") for name, number in by_suite], label_width=150
+            [(name, number, "#2e75b6") for name, number in _counts_by_suite(items)],
+            label_width=150,
         ),
-        rows=rows_html,
+        rows=_table_rows(items, with_sub_item=False),
+        subs_section=subs_section,
         kernel_a=html.escape(_标(info.get("baseline_kernel"))),
         kernel_b=html.escape(_标(info.get("candidate_kernel"))),
-        commit_a=html.escape(_标(info.get("baseline_commit"))),
-        commit_b=html.escape(_标(info.get("candidate_commit"))),
         stamp=html.escape(stamp),
-        prompt=html.escape(_prompt(findings, labels, threshold, style)),
+        prompt=html.escape("\n".join(_prompt_lines(items, subs, labels, info))),
     )
 
 
-_GRADE_COLORS = {"严重": "#c0392b", "明显": "#e67e22", "轻微": "#c9a227"}
+def _table_rows(entries, with_sub_item):
+    if not entries:
+        return "<tr><td colspan='4' class='empty'>本次未发现超过阈值的劣化项</td></tr>"
+    rows = []
+    for index, entry in enumerate(entries, 1):
+        name = _label(entry, with_sub_item)
+        if not with_sub_item and entry.get("count", 1) > 1:
+            name += "（含 {0} 个子项）".format(entry["count"])
+        rows.append(
+            "<tr><td>{0}</td><td>{1}</td><td>{2}</td><td>"
+            "<span class='badge g-{3}'>{4}</span>{5}</td></tr>".format(
+                index,
+                html.escape(name),
+                html.escape(entry["direction"]),
+                _grade_slug(entry["grade"]),
+                html.escape(entry["grade"]),
+                " <span class='amount'>{0}</span>".format(html.escape(entry["amount"]))
+                if entry["amount"]
+                else "",
+            )
+        )
+    return "\n".join(rows)
 
 
-def _counts_by_suite(findings):
+def _counts_by_suite(entries):
     order = []
-    for item in findings:
-        if item["suite"] not in order:
-            order.append(item["suite"])
-    return [(suite, sum(1 for item in findings if item["suite"] == suite)) for suite in order]
+    for entry in entries:
+        if entry["suite"] not in order:
+            order.append(entry["suite"])
+    return [
+        (suite, sum(1 for entry in entries if entry["suite"] == suite)) for suite in order
+    ]
 
 
 def _grade_slug(grade):
@@ -374,12 +468,16 @@ def _grade_slug(grade):
 def _svg_bars(items, label_width=64):
     """把计数画成横向条形图（内联 SVG，不依赖任何外部资源）。"""
     if not items or not any(number for _, number, _ in items):
-        return "<svg width='100%' height='34'><text x='4' y='22' fill='#6b7684'>无劣化项</text></svg>"
+        return (
+            "<svg width='100%' height='34'>"
+            "<text x='4' y='22' fill='#6b7684'>无劣化项</text></svg>"
+        )
     maximum = max(number for _, number, _ in items) or 1
-    bar_height, gap = 22, 10
-    width = 640
+    bar_height, gap, width = 22, 10, 640
     height = len(items) * (bar_height + gap) + 6
-    parts = ["<svg viewBox='0 0 {0} {1}' width='100%' height='{1}' role='img'>".format(width, height)]
+    parts = [
+        "<svg viewBox='0 0 {0} {1}' width='100%' height='{1}' role='img'>".format(width, height)
+    ]
     for index, (label, number, color) in enumerate(items):
         y = index * (bar_height + gap) + 3
         usable = width - label_width - 52
@@ -405,23 +503,7 @@ def _svg_bars(items, label_width=64):
     return "".join(parts)
 
 
-def _prompt(findings, labels, threshold, style):
-    lines = [
-        "你是一名性能工程专家。以下是某次性能测试的对比结论（数据已脱敏，不含任何测量值）：",
-        "对比对象：{0}（基线） vs {1}（对比）".format(labels[0], labels[1]),
-        "劣化阈值：{0}".format(_标(threshold, "{}%")),
-        "劣化项（套 / 项 / 方向 / 程度）：",
-    ]
-    for item in findings:
-        lines.append("  · {0} / {1} —— {2}，{3}".format(item["suite"], item["name"], item["direction"], item["grade"]))
-    lines.extend(
-        [
-            "请据此输出：① 本次劣化的整体特征；② 各劣化项之间可能的共性原因；",
-            "③ 按影响面与严重程度排序的排查优先级；④ 建议的验证与回归方式。",
-            "注意：不要编造任何具体测量数值。",
-        ]
-    )
-    return "\n".join(lines)
+# ——— 小工具 ———
 
 
 def _标(value, template=None):
@@ -439,12 +521,10 @@ def _宽度(text):
 
 
 def _补齐(text, width):
-    """按**显示宽度**左对齐补齐，避免中文列错位。"""
     return text + " " * max(width - _宽度(text), 0)
 
 
 def _截断(text, limit):
-    """按显示宽度截断，超长补省略号。"""
     if _宽度(text) <= limit:
         return text
     out, used = [], 0
