@@ -75,8 +75,8 @@ def test_三个版本的劣化程度表述不同(tmp_path):
         texts[style] = Path(txt_path).read_text(encoding="utf-8")
 
     assert "严重" in texts[1] and "明显" in texts[1]
-    assert "60.00%" not in texts[1] and ">30%" not in texts[1]      # 定性版不带任何量化
-    assert ">30%" in texts[2] and "60.00%" not in texts[2]          # 分档版不给精确值
+    assert "60.00%" not in texts[1] and "≥50%" not in texts[1]      # 定性版不带任何量化
+    assert "≥50%" in texts[2] and "60.00%" not in texts[2]          # 分档版不给精确值
     assert "60.00%" in texts[3]                                     # 精确版给百分比
 
 
@@ -123,6 +123,23 @@ def test_默认不展开子项_开启后才总结子项(tmp_path):
     assert "子项劣化汇总" in opened
     assert "blocksize-4k" in opened and "blocksize-16k" in opened
     assert "子项劣化汇总" in Path(opened_html).read_text(encoding="utf-8")
+
+
+def test_区间分档必须覆盖实际幅度(tmp_path):
+    """劣化 35% 应落在「20%~50%」档，而不是「10%~30%」。
+
+    此前分档文案是手写死的、与阈值不一致：35% 被判为「明显」，文案却写 10%~30%，
+    自相矛盾（V2 与 V3 对照时暴露）。
+    """
+    comparison = _造比较(tmp_path, {1: 0.65})   # -35%
+
+    txt_path, _ = write_report(comparison, str(tmp_path / "r2"), info=INFO, style=2)
+    text = Path(txt_path).read_text(encoding="utf-8")
+
+    assert "明显（20%~50%）" in text
+    assert "10%~30%" not in text            # 旧文案已废弃
+    txt_v3, _ = write_report(comparison, str(tmp_path / "r3"), info=INFO, style=3)
+    assert "35.00%" in Path(txt_v3).read_text(encoding="utf-8")
 
 
 def test_无劣化时也能出报告(tmp_path):
