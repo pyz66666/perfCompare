@@ -75,9 +75,11 @@ def test_三个版本的劣化程度表述不同(tmp_path):
         texts[style] = Path(txt_path).read_text(encoding="utf-8")
 
     assert "严重" in texts[1] and "明显" in texts[1]
-    assert "60.00%" not in texts[1] and "≥50%" not in texts[1]      # 定性版不带任何量化
-    assert "≥50%" in texts[2] and "60.00%" not in texts[2]          # 分档版不给精确值
-    assert "60.00%" in texts[3]                                     # 精确版给百分比
+    # 定性版：程度列不该带括号里的量化（说明段里出现阈值文案是正常的）
+    assert "严重（" not in texts[1] and "明显（" not in texts[1]
+    assert "严重（≥50%）" in texts[2]              # 分档版给区间
+    assert "60.00%" not in texts[2]                # 但不会给精确值
+    assert "60.00%" in texts[3]                    # 精确版给百分比
 
 
 def test_html_带可视化图表与系统标识(tmp_path):
