@@ -15,6 +15,7 @@ import traceback
 from .compare import compare
 from .config import load_config
 from .excel import write_excel
+from .identify import resolve
 from .report import write_report
 from .resultdir import load_with_report
 
@@ -69,6 +70,12 @@ def _run(args):
 
     baseline_path = config.baseline.path
     candidate_path = config.candidates[0].path
+    # 显示名与内核版本：配置里没写时自动推导（需求方 2026-10-20：每次手填太麻烦）。
+    base_name, base_kernel, base_src = resolve(config.baseline)
+    cand_name, cand_kernel, cand_src = resolve(config.candidates[0])
+    labels = (base_name or "结果A", cand_name or "结果B")
+    _交代身份("基线", baseline_path, labels[0], base_kernel, base_src)
+    _交代身份("对比", candidate_path, labels[1], cand_kernel, cand_src)
     # 两侧是同一个目录时，结果必然全为 0 —— 那是最危险的假结论（看起来「毫无劣化」）。
     _同一个目录(baseline_path, candidate_path)
     baseline, baseline_report = load_with_report(baseline_path)
@@ -108,7 +115,7 @@ def _run(args):
     write_excel(
         comparison,
         args.excel,
-        _显示名(config),
+        labels,
         {
             "baseline_path": baseline_path,
             "candidate_path": candidate_path,
@@ -129,11 +136,11 @@ def _run(args):
         txt_path, html_path = write_report(
             comparison,
             args.report,
-            _显示名(config),
+            labels,
             {
                 "threshold_pct": config.threshold_pct,
-                "baseline_kernel": config.baseline.kernel_version,
-                "candidate_kernel": config.candidates[0].kernel_version,
+                "baseline_kernel": base_kernel,
+                "candidate_kernel": cand_kernel,
                 "baseline_commit": config.baseline.commit_id,
                 "candidate_commit": config.candidates[0].commit_id,
             },
@@ -146,6 +153,19 @@ def _run(args):
     return 0
 
 
+def _交代身份(role, path, name, kernel, sources):
+    """打印这一侧是怎么被识别的：名字与内核版本是配置来的、还是自动推导的。
+
+    自动推导会「猜」，所以必须把猜的结果和依据摆出来让人当场核对。
+    """
+    name_source, kernel_source = sources
+    print(
+        "{0} {1}：显示名 {2}（{3}）；内核版本 {4}（{5}）".format(
+            role, path, name, name_source, kernel or "未提供", kernel_source
+        )
+    )
+
+
 def _同一个目录(baseline_path, candidate_path):
     """两侧解析到同一个真实目录时告警（含末尾斜杠、相对路径等写法差异）。"""
     if os.path.realpath(baseline_path) == os.path.realpath(candidate_path):
@@ -153,14 +173,6 @@ def _同一个目录(baseline_path, candidate_path):
             "    ⚠ 基线与对比指向**同一个目录**（{0}），结果必然全为 0 —— 请检查配置里的两个 path。"
             .format(baseline_path)
         )
-
-
-def _显示名(config):
-    """表头用的两侧名称；配置里没写就用「结果A／结果B」（需求方 2026-10-12）。"""
-    return (
-        config.baseline.name or "结果A",
-        config.candidates[0].name or "结果B",
-    )
 
 
 def _report_read(directory, report, label):
