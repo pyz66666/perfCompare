@@ -1,9 +1,15 @@
 """从结果目录自动识别「显示名」与「内核版本」，省去每次手填。
 
-这两项都能从现场信息推出来（需求方 2026-10-20 反馈手填太麻烦）：
-- **显示名**：结果目录路径本身就带了 OS 与页大小，
-  `/home/AutoBench/report/950/openEuler-24.03/64K/基线版本` → `openEuler-24.03-64K`
-- **内核版本**：SPEC CPU2017 报告里 `uname -a` / `SOFTWARE` 段带内核 release
+**显示名按两侧路径的差异推导**（不按层级约定去猜）：
+两侧路径从第一个不同之处开始的部分，才是真正的版本差异。
+
+    基线 …/950/openEuler-24.03/64K/基线版本
+    对比 …/950/openEuler-24.03-SP1/64K/对比版本
+    →   openEuler-24.03-64K / openEuler-24.03-SP1-64K
+
+侧别目录（基线版本/对比版本/baseline…）只是「哪一侧」，推导时会从末尾剥掉。
+
+**内核版本**从结果目录里 SPEC 报告的 `uname -a` / `SOFTWARE` 段读取。
 
 配置里显式写了 `name` / `kernel_version` 时**以配置为准**（自动推导只作兜底）。
 """
@@ -11,7 +17,7 @@ import glob
 import os
 import re
 
-# 侧别目录名：推导显示名时要去掉这一级（它只表示「哪一侧」，不是版本信息）。
+# 侧别目录名：只表示「哪一侧」，不是版本信息，推导时要剥掉。
 _SIDE_NAMES = frozenset(
     [
         "基线",
@@ -29,8 +35,10 @@ _SIDE_NAMES = frozenset(
     ]
 )
 
-# 显示名取「侧别目录」之上两级（OS + 页大小）。
-_NAME_DEPTH = 2
+# 差异部分只剩一级、且这一级本身很短（如 `4K`、`run1`）时，补一级公共前缀做上下文，
+# 否则名字会只剩 `4K` 这种没头没脑的东西；而 `openEuler-24.03-64K` 已经够完整，不必再加料。
+_MIN_DEPTH = 2
+_THIN_WIDTH = 6
 
 _SPEC_GLOB = "cpu2017_*.txt"
 # `uname -a: Linux host 6.8.0-1014-kunpeng-devel-64k #14-...`
@@ -39,18 +47,45 @@ _UNAME_RE = re.compile(r"Linux\s+\S+\s+(\d+\.\d+[^\s]*)")
 _SOFTWARE_RE = re.compile(r"OS:[^\n]*\n\s*(\d+\.\d+[^\s]*)")
 
 
-def derive_name(path):
-    """从结果目录路径推导显示名；路径不可用时返回 None。
+def derive_names(baseline_path, candidate_path):
+    """按两侧路径的差异推导显示名，返回 (基线名, 对比名)。"""
+    base_parts = _parts(baseline_path)
+    cand_parts = _parts(candidate_path)
 
-    例：`/home/AutoBench/report/950/openEuler-24.03/64K/基线版本` → `openEuler-24.03-64K`
-    若最后一级不是侧别名（如直接把 `64K` 目录给出），则直接用最后两级。
-    """
-    parts = [part for part in os.path.normpath(path).split(os.sep) if part and part != "."]
+    common = 0
+    while (
+        common < len(base_parts)
+        and common < len(cand_parts)
+        and base_parts[common] == cand_parts[common]
+    ):
+        common += 1
+
+    base_tail = base_parts[common:]
+    cand_tail = cand_parts[common:]
+
+    if not base_tail and not cand_tail:
+        # 两侧是同一个目录 —— 没有差异可推，退回末级目录名（调用方会告警）。
+        fallback = base_parts[-1] if base_parts else None
+        return fallback, fallback
+
+    # 一侧是另一侧的前缀（如 …/64K 与 …/64K/对比）：短的一侧用末级目录名补齐。
+    if not base_tail:
+        base_tail = base_parts[-1:]
+    if not cand_tail:
+        cand_tail = cand_parts[-1:]
+
+    return (
+        _join_with_context(base_tail, base_parts, common),
+        _join_with_context(cand_tail, cand_parts, common),
+    )
+
+
+def derive_name(path):
+    """只有一个路径时（无对照可比）的兜底：剥掉侧别目录后取末两级。"""
+    parts = _parts(path)
     if not parts:
         return None
-    if len(parts) > 1 and parts[-1].lower() in _SIDE_NAMES:
-        parts = parts[:-1]
-    tail = parts[-_NAME_DEPTH:]
+    tail = parts[-_MIN_DEPTH:]
     return "-".join(tail)
 
 
@@ -72,24 +107,46 @@ def detect_kernel_version(path):
     return None
 
 
-def resolve(result_dir):
-    """返回 (显示名, 内核版本, 来源说明)；配置优先，缺失时自动推导。
+def resolve_names(baseline, candidate):
+    """返回 ((基线名, 对比名), (基线来源, 对比来源))；配置优先。"""
+    derived_base, derived_cand = derive_names(baseline.path, candidate.path)
+    names = [derived_base, derived_cand]
+    sources = ["按两侧路径差异推导", "按两侧路径差异推导"]
+    for index, result_dir in enumerate((baseline, candidate)):
+        if result_dir.name:
+            names[index] = result_dir.name
+            sources[index] = "配置"
+    return tuple(names), tuple(sources)
 
-    来源说明用于在终端打印「这个名字/版本是怎么来的」，便于当场核对。
-    """
-    name_source = "配置"
-    name = result_dir.name
-    if not name:
-        name = derive_name(result_dir.path)
-        name_source = "按目录路径推导" if name else "无法推导"
 
-    kernel_source = "配置"
-    kernel = result_dir.kernel_version
-    if not kernel:
-        kernel = detect_kernel_version(result_dir.path)
-        kernel_source = "读自 SPEC 报告" if kernel else "未找到"
+def resolve_kernel(result_dir):
+    """返回 (内核版本, 来源说明)；配置优先。"""
+    if result_dir.kernel_version:
+        return result_dir.kernel_version, "配置"
+    detected = detect_kernel_version(result_dir.path)
+    if detected:
+        return detected, "读自 SPEC 报告"
+    return None, "未找到"
 
-    return name, kernel, (name_source, kernel_source)
+
+def _parts(path):
+    """切分路径并剥掉末尾的侧别目录。"""
+    parts = [part for part in os.path.normpath(path).split(os.sep) if part and part != "."]
+    if len(parts) > 1 and parts[-1].lower() in _SIDE_NAMES:
+        parts = parts[:-1]
+    return parts
+
+
+def _join_with_context(tail, parts, common):
+    """把差异部分连成名字；只剩一级「单薄」的名字时补一级公共前缀做上下文。"""
+    if len(tail) < _MIN_DEPTH and common > 0 and _is_thin(tail[0]):
+        tail = parts[common - 1 : common] + tail
+    return "-".join(tail)
+
+
+def _is_thin(component):
+    """这一级名字本身信息量是否太少（短，或纯数字/页大小/run 编号）。"""
+    return len(component) <= _THIN_WIDTH
 
 
 def _spec_reports(path):

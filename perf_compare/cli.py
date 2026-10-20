@@ -15,7 +15,7 @@ import traceback
 from .compare import compare
 from .config import load_config
 from .excel import write_excel
-from .identify import resolve
+from .identify import resolve_kernel, resolve_names
 from .report import write_report
 from .resultdir import load_with_report
 
@@ -71,11 +71,14 @@ def _run(args):
     baseline_path = config.baseline.path
     candidate_path = config.candidates[0].path
     # 显示名与内核版本：配置里没写时自动推导（需求方 2026-10-20：每次手填太麻烦）。
-    base_name, base_kernel, base_src = resolve(config.baseline)
-    cand_name, cand_kernel, cand_src = resolve(config.candidates[0])
-    labels = (base_name or "结果A", cand_name or "结果B")
-    _交代身份("基线", baseline_path, labels[0], base_kernel, base_src)
-    _交代身份("对比", candidate_path, labels[1], cand_kernel, cand_src)
+    # 显示名按**两侧路径的差异**推导，不按层级约定去猜。
+    names, name_sources = resolve_names(config.baseline, config.candidates[0])
+    labels = (names[0] or "结果A", names[1] or "结果B")
+    base_kernel, base_kernel_src = resolve_kernel(config.baseline)
+    cand_kernel, cand_kernel_src = resolve_kernel(config.candidates[0])
+    _交代身份("基线", baseline_path, labels[0], name_sources[0], base_kernel, base_kernel_src)
+    _交代身份("对比", candidate_path, labels[1], name_sources[1], cand_kernel, cand_kernel_src)
+    _告警识别(labels, name_sources)
     # 两侧是同一个目录时，结果必然全为 0 —— 那是最危险的假结论（看起来「毫无劣化」）。
     _同一个目录(baseline_path, candidate_path)
     baseline, baseline_report = load_with_report(baseline_path)
@@ -153,17 +156,33 @@ def _run(args):
     return 0
 
 
-def _交代身份(role, path, name, kernel, sources):
+def _交代身份(role, path, name, name_source, kernel, kernel_source):
     """打印这一侧是怎么被识别的：名字与内核版本是配置来的、还是自动推导的。
 
-    自动推导会「猜」，所以必须把猜的结果和依据摆出来让人当场核对。
+    自动推导会「猜」，所以必须把猜的结果和依据摆出来让人当场核对 ——
+    名字会进对外报告，猜错了比麻烦更糟。
     """
-    name_source, kernel_source = sources
     print(
         "{0} {1}：显示名 {2}（{3}）；内核版本 {4}（{5}）".format(
             role, path, name, name_source, kernel or "未提供", kernel_source
         )
     )
+
+
+def _告警识别(labels, name_sources):
+    """自动推导出可疑结果时告警：两侧同名（无法区分版本）或名字过短。"""
+    if "配置" in name_sources:
+        return
+    if labels[0] == labels[1]:
+        print(
+            "    ⚠ 两侧显示名相同（{0}）—— 无法从路径区分版本，"
+            "请在配置里用 name 明确指定。".format(labels[0])
+        )
+    elif min(len(label) for label in labels) <= 6:
+        print(
+            "    ⚠ 自动推导的显示名偏短（{0} / {1}），请确认是否符合预期；"
+            "不满意可在配置里用 name 指定。".format(labels[0], labels[1])
+        )
 
 
 def _同一个目录(baseline_path, candidate_path):
