@@ -267,6 +267,183 @@ def test_命令行_两侧数据完全一致时告警(tmp_path, capsys):
     assert any("完全一致" in line for line in warnings), "实际输出为：\n" + output
 
 
+def _造两个结果目录(tmp_path, factor=0.8):
+    """造一份 fio 对比：对比侧第 1 列乘 factor（<1 → 劣化）。
+
+    目录结构照真实布局：`…/report/950/<OS>/64K/<侧别>`，
+    这样两个路径的差异正好落在 OS 那一级。
+    """
+    baseline = tmp_path / "report" / "950" / "openEuler-24.03" / "64K" / "基线版本"
+    candidate = tmp_path / "report" / "950" / "openEuler-24.03-SP1" / "64K" / "对比版本"
+    for target in (baseline, candidate):
+        target.mkdir(parents=True)
+        shutil.copy(str(FIXTURE / "基础性能测试" / "fio.txt"), str(target / "fio.txt"))
+    path = candidate / "fio.txt"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    fields = lines[1].split()
+    fields[1] = repr(float(fields[1]) * factor)
+    lines[1] = " ".join(fields)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return baseline, candidate
+
+
+def test_命令行_直接给两个目录无需配置文件(tmp_path, capsys):
+    """需求方 2026-10-20：用传参代替配置文件，省掉每次改 JSON。"""
+    baseline, candidate = _造两个结果目录(tmp_path)
+    excel = tmp_path / "对比表格.xlsx"
+
+    exit_code = main(
+        [
+            "--baseline",
+            str(baseline),
+            "--candidate",
+            str(candidate),
+            "--excel",
+            str(excel),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "已写出对比表格" in output
+    workbook = openpyxl.load_workbook(str(excel))
+    header = [cell.value for cell in workbook["汇总"][1]][:3]
+    # 名字按两侧路径差异推导：差异落在 OS 那一级 → openEuler-24.03-64K 等
+    assert header == ["测试套", "openEuler-24.03-64K", "openEuler-24.03-SP1-64K"]
+
+
+def test_命令行_传参指定显示名与内核版本(tmp_path, capsys):
+    """OS 名称与内核版本可以直接用命令行给，优先于自动推导。"""
+    baseline, candidate = _造两个结果目录(tmp_path)
+    excel = tmp_path / "对比表格.xlsx"
+    report = tmp_path / "报告"
+
+    exit_code = main(
+        [
+            "--baseline",
+            str(baseline),
+            "--candidate",
+            str(candidate),
+            "--baseline-name",
+            "openEuler-24.03-64K",
+            "--candidate-name",
+            "openEuler-24.03-SP1-64K",
+            "--baseline-kernel",
+            "6.8.0-1014-kunpeng",
+            "--candidate-kernel",
+            "6.8.0-1015-kunpeng",
+            "--excel",
+            str(excel),
+            "--report",
+            str(report),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    workbook = openpyxl.load_workbook(str(excel))
+    assert [cell.value for cell in workbook["汇总"][1]][:3] == [
+        "测试套",
+        "openEuler-24.03-64K",
+        "openEuler-24.03-SP1-64K",
+    ]
+    report_text = (tmp_path / "报告.txt").read_text(encoding="utf-8")
+    assert "6.8.0-1014-kunpeng / 6.8.0-1015-kunpeng" in report_text
+    assert "（配置）" not in output or "命令行" in output
+
+
+def test_命令行_只给名字不给目录也能覆盖配置里的名字(tmp_path, capsys):
+    """配置文件仍然可用，命令行名字覆盖它。"""
+    baseline, candidate = _造两个结果目录(tmp_path)
+    config_path = _写配置(tmp_path, baseline, candidate)
+    excel = tmp_path / "对比表格.xlsx"
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--candidate-name",
+            "命令行指定的名字",
+            "--excel",
+            str(excel),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    assert exit_code == 0
+    workbook = openpyxl.load_workbook(str(excel))
+    header = [cell.value for cell in workbook["汇总"][1]][:3]
+    assert header[2] == "命令行指定的名字"
+
+
+def test_命令行_既无配置也无目录时明确报错(tmp_path, capsys):
+    exit_code = main(
+        [
+            "--excel",
+            str(tmp_path / "对比表格.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "--baseline" in err and "--candidate" in err
+
+
+def test_命令行_配置文件与目录同时给时明确报错(tmp_path, capsys):
+    baseline, candidate = _造两个结果目录(tmp_path)
+    config_path = _写配置(tmp_path, baseline, candidate)
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--baseline",
+            str(baseline),
+            "--candidate",
+            str(candidate),
+            "--excel",
+            str(tmp_path / "对比表格.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    assert exit_code == 2
+    assert "只能二选一" in capsys.readouterr().err
+
+
+def test_命令行_阈值可用传参覆盖(tmp_path, capsys):
+    """传参 --threshold 覆盖配置里的阈值。"""
+    baseline, candidate = _造两个结果目录(tmp_path, factor=0.90)   # -10%
+    config_path = _写配置(tmp_path, baseline, candidate)             # 配置阈值 5%
+    excel = tmp_path / "对比表格.xlsx"
+
+    # 阈值提到 15% → 10% 的差异不再算劣化
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--threshold",
+            "15",
+            "--excel",
+            str(excel),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "劣化 0 条" in output
+
+
 def test_命令行_报告被排除的测试套(tmp_path, capsys):
     """只在一侧存在的套要明说被排除了，不能静默不出现。
 

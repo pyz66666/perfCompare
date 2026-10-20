@@ -1,19 +1,23 @@
 """命令行入口：装配配置、结果目录加载、比对与写出。
 
-用法：
+用法（配置文件与目录传参二选一）：
     python3 -m perf_compare --config compare.json --excel 对比表格.xlsx
+    python3 -m perf_compare --baseline <目录> --candidate <目录> --excel 对比表格.xlsx
+
+显示名与内核版本的取值优先级：**命令行 > 配置文件 > 自动推导**。
 
 出错时把**完整堆栈追加写入日志文件**（默认 `logs/perf-compare.log`，可用 `--log-dir` 改），
 终端上只提示日志路径。终端信息一闪而过，日志才留得住，便于以后排查。
 """
 import argparse
+import dataclasses
 import datetime
 import os
 import sys
 import traceback
 
 from .compare import compare
-from .config import load_config
+from .config import ResultDir, load_config
 from .excel import write_excel
 from .identify import resolve_kernel, resolve_names
 from .report import write_report
@@ -21,6 +25,8 @@ from .resultdir import load_with_report
 
 LOG_FILE_NAME = "perf-compare.log"
 DEFAULT_LOG_DIR = "logs"
+# 用目录传参（不写配置文件）时的默认劣化阈值。
+DEFAULT_THRESHOLD = 5.0
 
 
 def main(argv=None):
@@ -39,7 +45,16 @@ def _build_parser():
         prog="perf-compare",
         description="把多次性能测试的结果目录横向比对，判定劣化并产出对比表格。",
     )
-    parser.add_argument("--config", required=True, help="配置文件路径（JSON）")
+    parser.add_argument("--config", help="配置文件路径（JSON）；与 --baseline/--candidate 二选一")
+    parser.add_argument("--baseline", help="基线结果目录；与 --config 二选一")
+    parser.add_argument("--candidate", help="对比结果目录；与 --config 二选一")
+    parser.add_argument("--baseline-name", help="基线显示名（覆盖配置与自动推导）")
+    parser.add_argument("--candidate-name", help="对比显示名（覆盖配置与自动推导）")
+    parser.add_argument("--baseline-kernel", help="基线内核版本（覆盖配置与自动推导）")
+    parser.add_argument("--candidate-kernel", help="对比内核版本（覆盖配置与自动推导）")
+    parser.add_argument(
+        "--threshold", type=float, help="劣化阈值百分比（覆盖配置；纯目录传参时默认 5.0）"
+    )
     parser.add_argument("--excel", required=True, help="对比表格输出路径（.xlsx）")
     parser.add_argument(
         "--report",
@@ -57,27 +72,22 @@ def _build_parser():
 
 
 def _run(args):
-    config = load_config(args.config)
-
-    # 多个对比结果目录时 Excel 的行列该怎么组织尚未确定（阻塞项 O8），
-    # 因此首版只接受恰好一个对比目录，而不是自行发明一种布局。
-    if len(config.candidates) != 1:
-        print(
-            "首版只支持恰好一个对比结果目录，配置里给了 %d 个。" % len(config.candidates),
-            file=sys.stderr,
-        )
+    inputs = _输入(args)
+    if inputs is None:
         return 2
+    baseline_dir, candidate_dir, threshold = inputs
 
-    baseline_path = config.baseline.path
-    candidate_path = config.candidates[0].path
-    # 显示名与内核版本：配置里没写时自动推导（需求方 2026-10-20：每次手填太麻烦）。
-    # 显示名按**两侧路径的差异**推导，不按层级约定去猜。
-    names, name_sources = resolve_names(config.baseline, config.candidates[0])
+    baseline_path = baseline_dir.path
+    candidate_path = candidate_dir.path
+    # 显示名与内核版本：命令行 > 配置文件 > 自动推导（后者按两侧路径差异推）。
+    names, name_sources = resolve_names(baseline_dir, candidate_dir)
     labels = (names[0] or "结果A", names[1] or "结果B")
-    base_kernel, base_kernel_src = resolve_kernel(config.baseline)
-    cand_kernel, cand_kernel_src = resolve_kernel(config.candidates[0])
-    _交代身份("基线", baseline_path, labels[0], name_sources[0], base_kernel, base_kernel_src)
-    _交代身份("对比", candidate_path, labels[1], name_sources[1], cand_kernel, cand_kernel_src)
+    base_kernel, base_kernel_src = resolve_kernel(baseline_dir)
+    cand_kernel, cand_kernel_src = resolve_kernel(candidate_dir)
+    name_sources = _来源(name_sources, args.baseline_name, args.candidate_name)
+    kernels = _来源((base_kernel_src, cand_kernel_src), args.baseline_kernel, args.candidate_kernel)
+    _交代身份("基线", baseline_path, labels[0], name_sources[0], base_kernel, kernels[0])
+    _交代身份("对比", candidate_path, labels[1], name_sources[1], cand_kernel, kernels[1])
     _告警识别(labels, name_sources)
     # 两侧是同一个目录时，结果必然全为 0 —— 那是最危险的假结论（看起来「毫无劣化」）。
     _同一个目录(baseline_path, candidate_path)
@@ -89,7 +99,7 @@ def _run(args):
     _report_read(baseline_path, baseline_report, "基线")
     _report_read(candidate_path, candidate_report, "对比")
 
-    comparison = compare(baseline, candidate, config.threshold_pct)
+    comparison = compare(baseline, candidate, threshold)
     rows = comparison.rows()
 
     if not rows:
@@ -122,7 +132,7 @@ def _run(args):
         {
             "baseline_path": baseline_path,
             "candidate_path": candidate_path,
-            "threshold_pct": config.threshold_pct,
+            "threshold_pct": threshold,
             "excluded_suites": excluded,
         },
     )
@@ -141,11 +151,11 @@ def _run(args):
             args.report,
             labels,
             {
-                "threshold_pct": config.threshold_pct,
+                "threshold_pct": threshold,
                 "baseline_kernel": base_kernel,
                 "candidate_kernel": cand_kernel,
-                "baseline_commit": config.baseline.commit_id,
-                "candidate_commit": config.candidates[0].commit_id,
+                "baseline_commit": baseline_dir.commit_id,
+                "candidate_commit": candidate_dir.commit_id,
             },
             summarize_subitems=args.summarize_subitems,
         )
@@ -154,6 +164,70 @@ def _run(args):
         )
 
     return 0
+
+
+def _输入(args):
+    """装配两侧输入：配置文件 或 两个目录（二选一），并应用命令行覆盖。
+
+    成功返回 (基线 ResultDir, 对比 ResultDir, 阈值)；参数组合不合法时打印原因并返回 None。
+    """
+    use_config = bool(args.config)
+    use_dirs = bool(args.baseline or args.candidate)
+    if use_config and use_dirs:
+        print(
+            "--config 与 --baseline/--candidate 只能二选一（避免路径来源歧义）。",
+            file=sys.stderr,
+        )
+        return None
+    if not use_config and not (args.baseline and args.candidate):
+        print(
+            "请指定输入：用 --config <配置文件>，或用 --baseline <基线目录> "
+            "--candidate <对比目录> 直接传参。",
+            file=sys.stderr,
+        )
+        return None
+
+    if use_config:
+        config = load_config(args.config)
+        # 多个对比结果目录时 Excel 的行列该怎么组织尚未确定（阻塞项 O8），
+        # 因此首版只接受恰好一个对比目录，而不是自行发明一种布局。
+        if len(config.candidates) != 1:
+            print(
+                "首版只支持恰好一个对比结果目录，配置里给了 %d 个。" % len(config.candidates),
+                file=sys.stderr,
+            )
+            return None
+        baseline_dir = config.baseline
+        candidate_dir = config.candidates[0]
+        threshold = config.threshold_pct
+    else:
+        baseline_dir = ResultDir(path=args.baseline)
+        candidate_dir = ResultDir(path=args.candidate)
+        threshold = DEFAULT_THRESHOLD
+
+    baseline_dir = _覆盖(baseline_dir, args.baseline_name, args.baseline_kernel)
+    candidate_dir = _覆盖(candidate_dir, args.candidate_name, args.candidate_kernel)
+    if args.threshold is not None:
+        threshold = args.threshold
+    return baseline_dir, candidate_dir, threshold
+
+
+def _覆盖(result_dir, name, kernel):
+    """把命令行给的显示名/内核版本盖到 ResultDir 上（不传则保持原样）。"""
+    changes = {}
+    if name:
+        changes["name"] = name
+    if kernel:
+        changes["kernel_version"] = kernel
+    return dataclasses.replace(result_dir, **changes) if changes else result_dir
+
+
+def _来源(sources, base_override, cand_override):
+    """命令行给了值时，把来源标成「命令行」，便于终端核对。"""
+    return (
+        "命令行" if base_override else sources[0],
+        "命令行" if cand_override else sources[1],
+    )
 
 
 def _交代身份(role, path, name, name_source, kernel, kernel_source):
