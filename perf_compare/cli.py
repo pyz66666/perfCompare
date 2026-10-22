@@ -77,40 +77,39 @@ def _run(args):
         return 2
     baseline_dir, candidate_dir, threshold = inputs
 
-    baseline_path = baseline_dir.path
-    candidate_path = candidate_dir.path
     # 显示名与内核版本：命令行 > 配置文件 > 自动推导（后者按两侧路径差异推）。
     names, name_sources = resolve_names(baseline_dir, candidate_dir)
-    labels = (names[0] or "结果A", names[1] or "结果B")
-    base_kernel, base_kernel_src = resolve_kernel(baseline_dir)
-    cand_kernel, cand_kernel_src = resolve_kernel(candidate_dir)
     name_sources = _来源(name_sources, args.baseline_name, args.candidate_name)
-    kernels = _来源((base_kernel_src, cand_kernel_src), args.baseline_kernel, args.candidate_kernel)
-    _交代身份("基线", baseline_path, labels[0], name_sources[0], base_kernel, kernels[0])
-    _交代身份("对比", candidate_path, labels[1], name_sources[1], cand_kernel, kernels[1])
+    base_kernel, base_kernel_src = resolve_kernel(baseline_dir)
+    base_kernel_src = "命令行" if args.baseline_kernel else base_kernel_src
+
+    if candidate_dir is None:
+        return _整理(baseline_dir, names[0], name_sources[0], base_kernel, base_kernel_src, args)
+
+    labels = (names[0] or "结果A", names[1] or "结果B")
+    cand_kernel, cand_kernel_src = resolve_kernel(candidate_dir)
+    kernels = _来源(
+        (base_kernel_src, cand_kernel_src), args.baseline_kernel, args.candidate_kernel
+    )
+    _交代身份("基线", baseline_dir.path, labels[0], name_sources[0], base_kernel, kernels[0])
+    _交代身份("对比", candidate_dir.path, labels[1], name_sources[1], cand_kernel, kernels[1])
     _告警识别(labels, name_sources)
     # 两侧是同一个目录时，结果必然全为 0 —— 那是最危险的假结论（看起来「毫无劣化」）。
-    _同一个目录(baseline_path, candidate_path)
-    baseline, baseline_report = load_with_report(baseline_path)
-    candidate, candidate_report = load_with_report(candidate_path)
+    _同一个目录(baseline_dir.path, candidate_dir.path)
+
+    baseline, baseline_report = load_with_report(baseline_dir.path)
+    candidate, candidate_report = load_with_report(candidate_dir.path)
 
     # 主动交代「读到什么、缺什么」—— 结果目录里缺失的套会被静默跳过，
     # 不打印出来的话，用户无从判断是数据不全、路径填错，还是文件格式变了。
-    _report_read(baseline_path, baseline_report, "基线")
-    _report_read(candidate_path, candidate_report, "对比")
+    _report_read(baseline_dir.path, baseline_report, "基线")
+    _report_read(candidate_dir.path, candidate_report, "对比")
 
     comparison = compare(baseline, candidate, threshold)
     rows = comparison.rows()
 
     if not rows:
-        # 退出码 0 + 空表是最危险的失败方式：用户会以为跑成功了。
-        print(
-            "两个结果目录里没有读到任何测试套，未生成表格。\n"
-            "请检查配置里的 path 是否指向「结果目录」本身 ——\n"
-            "该目录下应当直接放着结果文件（如 fio.txt、stream.txt、mysql_tpcc.txt）。",
-            file=sys.stderr,
-        )
-        return 3
+        return _什么都没读到()
 
     excluded = comparison.excluded_suites()
     if excluded:
@@ -130,8 +129,8 @@ def _run(args):
         args.excel,
         labels,
         {
-            "baseline_path": baseline_path,
-            "candidate_path": candidate_path,
+            "baseline_path": baseline_dir.path,
+            "candidate_path": candidate_dir.path,
             "threshold_pct": threshold,
             "excluded_suites": excluded,
         },
@@ -159,11 +158,59 @@ def _run(args):
             },
             summarize_subitems=args.summarize_subitems,
         )
-        print(
-            "已写出测试报告：{0}、{1}（不含测量值）".format(txt_path, html_path)
-        )
+        print("已写出测试报告：{0}、{1}（不含测量值）".format(txt_path, html_path))
 
     return 0
+
+
+def _整理(result_dir, name, name_source, kernel, kernel_source, args):
+    """只有一份数据时的「整理模式」：只把结果格式化写成 excel，不比对、不出报告。
+
+    实现上仍走 `compare(自己, 自己)`，这样**套级口径与对比模式完全一致**；
+    但渲染时只输出一侧（`single=True`），不写差距与劣化列。
+    """
+    _交代身份("数据", result_dir.path, name or "结果A", name_source, kernel, kernel_source)
+    results, report = load_with_report(result_dir.path)
+    _report_read(result_dir.path, report, "数据")
+
+    if not results.observations() and not _套数(results):
+        return _什么都没读到()
+
+    comparison = compare(results, results, 1.0)
+    if not comparison.rows():
+        return _什么都没读到()
+
+    write_excel(
+        comparison,
+        args.excel,
+        (name or "结果A", None),
+        {"baseline_path": result_dir.path, "baseline_kernel": kernel},
+        single=True,
+    )
+    print(
+        "已写出整理表格：{0}（整理模式：单侧数据，不含对比结果，共 {1} 个测试套）".format(
+            args.excel, len({row.suite for row in comparison.rows()})
+        )
+    )
+
+    if args.report:
+        print("    ⚠ 整理模式下没有对比结果，跳过报告生成（--report 已忽略）。")
+    return 0
+
+
+def _套数(results):
+    return len(getattr(results, "_suites", {}))
+
+
+def _什么都没读到():
+    # 退出码 0 + 空表是最危险的失败方式：用户会以为跑成功了。
+    print(
+        "没有读到任何测试套，未生成表格。\n"
+        "请检查配置里的 path 是否指向「结果目录」本身 ——\n"
+        "该目录下应当直接放着结果文件（如 fio.txt、stream.txt、mysql_tpcc.txt）。",
+        file=sys.stderr,
+    )
+    return 3
 
 
 def _输入(args):
@@ -179,7 +226,7 @@ def _输入(args):
             file=sys.stderr,
         )
         return None
-    if not use_config and not (args.baseline and args.candidate):
+    if not use_config and not args.baseline:
         print(
             "请指定输入：用 --config <配置文件>，或用 --baseline <基线目录> "
             "--candidate <对比目录> 直接传参。",
@@ -191,22 +238,24 @@ def _输入(args):
         config = load_config(args.config)
         # 多个对比结果目录时 Excel 的行列该怎么组织尚未确定（阻塞项 O8），
         # 因此首版只接受恰好一个对比目录，而不是自行发明一种布局。
-        if len(config.candidates) != 1:
+        if len(config.candidates) > 1:
             print(
-                "首版只支持恰好一个对比结果目录，配置里给了 %d 个。" % len(config.candidates),
+                "首版只支持一个对比结果目录，配置里给了 %d 个。" % len(config.candidates),
                 file=sys.stderr,
             )
             return None
+        # 没有候选 = 单侧整理模式（只格式化，不比对）。
+        candidate_dir = config.candidates[0] if config.candidates else None
         baseline_dir = config.baseline
-        candidate_dir = config.candidates[0]
         threshold = config.threshold_pct
     else:
         baseline_dir = ResultDir(path=args.baseline)
-        candidate_dir = ResultDir(path=args.candidate)
+        candidate_dir = ResultDir(path=args.candidate) if args.candidate else None
         threshold = DEFAULT_THRESHOLD
 
     baseline_dir = _覆盖(baseline_dir, args.baseline_name, args.baseline_kernel)
-    candidate_dir = _覆盖(candidate_dir, args.candidate_name, args.candidate_kernel)
+    if candidate_dir is not None:
+        candidate_dir = _覆盖(candidate_dir, args.candidate_name, args.candidate_kernel)
     if args.threshold is not None:
         threshold = args.threshold
     return baseline_dir, candidate_dir, threshold

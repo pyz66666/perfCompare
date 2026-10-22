@@ -444,6 +444,95 @@ def test_命令行_阈值可用传参覆盖(tmp_path, capsys):
     assert "劣化 0 条" in output
 
 
+def _造单侧目录(tmp_path):
+    target = tmp_path / "report" / "950" / "openEuler-24.03" / "64K" / "基线版本"
+    target.mkdir(parents=True)
+    for name in ("fio.txt", "stream.txt"):
+        shutil.copy(str(FIXTURE / "基础性能测试" / name), str(target / name))
+    return target
+
+
+def test_命令行_只有基线时进入整理模式(tmp_path, capsys):
+    """只有一份数据时仍可执行：只把结果整理成 excel，不做比对、不出报告。"""
+    baseline = _造单侧目录(tmp_path)
+    excel = tmp_path / "整理.xlsx"
+
+    exit_code = main(
+        [
+            "--baseline",
+            str(baseline),
+            "--excel",
+            str(excel),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "整理" in output
+    assert excel.exists()
+
+    workbook = openpyxl.load_workbook(str(excel))
+    assert "子项劣化汇总" not in workbook.sheetnames
+    assert len([cell.value for cell in workbook["汇总"][1]]) == 2      # 测试套 + 数值
+    assert "fio" in workbook.sheetnames
+
+
+def test_命令行_整理模式下请求报告会被跳过(tmp_path, capsys):
+    """整理模式没有对比结果，报告无从写起 —— 明确说明并跳过，而不是报错。"""
+    baseline = _造单侧目录(tmp_path)
+
+    exit_code = main(
+        [
+            "--baseline",
+            str(baseline),
+            "--excel",
+            str(tmp_path / "整理.xlsx"),
+            "--report",
+            str(tmp_path / "报告"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "跳过报告" in output or "不生成报告" in output
+    assert not (tmp_path / "报告.txt").exists()
+    assert not (tmp_path / "报告.html").exists()
+
+
+def test_命令行_配置里没有候选时也走整理模式(tmp_path, capsys):
+    baseline = _造单侧目录(tmp_path)
+    config_path = tmp_path / "compare.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "baseline": {"path": str(baseline)},
+                "candidates": [],
+                "threshold_pct": 5.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--excel",
+            str(tmp_path / "整理.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    assert exit_code == 0
+    workbook = openpyxl.load_workbook(str(tmp_path / "整理.xlsx"))
+    assert "子项劣化汇总" not in workbook.sheetnames
+
+
 def test_命令行_报告被排除的测试套(tmp_path, capsys):
     """只在一侧存在的套要明说被排除了，不能静默不出现。
 

@@ -287,6 +287,56 @@ def test_写出对比表格_spark与spark_docker用宽表明细(tmp_path):
             assert wide.cell(row=2, column=column).number_format == "General"
 
 
+def test_单侧整理模式_只有数值没有对比列(tmp_path):
+    """只有一份数据时，按同样格式整理成表格：只有一列数值，没有差距与劣化列。
+
+    实现上复用「自身与自身比对」的结果，保证口径与对比模式完全一致，
+    但渲染时只输出一侧、不写「子项劣化汇总」。
+    """
+    results = load(str(FIXTURE))
+    comparison = compare(results, results, threshold_pct=5.0)
+    out_path = tmp_path / "整理.xlsx"
+
+    write_excel(
+        comparison,
+        str(out_path),
+        labels=("openEuler-24.03-64K", None),
+        info={"baseline_path": "/data/基线版本", "suite_count": 19},
+        single=True,
+    )
+
+    workbook = openpyxl.load_workbook(str(out_path))
+
+    # 没有劣化汇总表（单侧无对比，谈不上劣化）
+    assert "子项劣化汇总" not in workbook.sheetnames
+    assert workbook.sheetnames[0] == "说明"
+
+    # 汇总：只有「测试套 + 数值」两列
+    assert [cell.value for cell in workbook["汇总"][1]] == ["测试套", "openEuler-24.03-64K"]
+
+    # 明细：同样只有两列
+    assert [cell.value for cell in workbook["fio"][1]] == ["测试子项", "openEuler-24.03-64K"]
+
+    # 宽表：本侧的轮次 + 平均，共 5 列（无对比侧、无差距列）
+    spark_header = [cell.value for cell in workbook["spark"][1]]
+    assert spark_header == [
+        "测试子项",
+        "openEuler-24.03-64K-轮1",
+        "openEuler-24.03-64K-轮2",
+        "openEuler-24.03-64K-轮3",
+        "openEuler-24.03-64K-avg",
+    ]
+
+    # 说明页标明是单侧整理，不是对比
+    notes_text = " ".join(
+        str(cell.value)
+        for row in workbook["说明"].iter_rows()
+        for cell in row
+        if cell.value is not None
+    )
+    assert "整理" in notes_text
+
+
 def test_写出对比表格_输出目录不存在时自动创建(tmp_path):
     """输出目录不存在就直接失败，是个不必要的坑 —— 应当自动建目录。"""
     _两侧样例(tmp_path)

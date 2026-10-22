@@ -78,11 +78,14 @@ _劣化分档 = (
 _改善分档 = ((20.0, PatternFill("solid", fgColor="A9D08E")),)
 
 
-def write_excel(comparison, path, labels=DEFAULT_LABELS, info=None):
+def write_excel(comparison, path, labels=DEFAULT_LABELS, info=None, single=False):
     """把一次比对写成 xlsx。
 
     `labels` 是两侧结果目录的显示名；`info` 是给「说明」页用的上下文
     （`baseline_path` / `candidate_path` / `threshold_pct` / `excluded_suites`）。
+
+    `single=True` 时按**单侧整理**写出：只有一列数值，没有差距/劣化列，
+    也不写「子项劣化汇总」——用于只有一份结果数据、只做格式化归档的场景。
     """
     rows = comparison.rows()
     labels = tuple(labels)
@@ -92,30 +95,35 @@ def write_excel(comparison, path, labels=DEFAULT_LABELS, info=None):
 
     notes = workbook.active
     notes.title = NOTES_SHEET
-    _写说明页(notes, labels, info)
+    _写说明页(notes, labels, info, single)
 
-    _写汇总表(workbook.create_sheet(title=SUMMARY_SHEET), comparison, labels)
+    _写汇总表(workbook.create_sheet(title=SUMMARY_SHEET), comparison, labels, single)
 
-    _写劣化汇总(workbook.create_sheet(title=DEGRADED_SHEET), comparison, labels)
+    if not single:
+        _写劣化汇总(workbook.create_sheet(title=DEGRADED_SHEET), comparison, labels)
 
     for suite in _suites_in_order(rows):
         detail = workbook.create_sheet(title=suite)
         if suite in _WIDE_LAYOUTS:
-            _写宽表明细(detail, suite, _WIDE_LAYOUTS[suite], rows, labels)
+            _写宽表明细(detail, suite, _WIDE_LAYOUTS[suite], rows, labels, single)
         else:
-            _写明细表(detail, suite, rows, labels)
+            _写明细表(detail, suite, rows, labels, single)
         _修饰表(detail, wide=suite in _WIDE_LAYOUTS)
 
     _修饰表(notes, wide=False)
     _修饰表(workbook[SUMMARY_SHEET], wide=False)
-    _修饰表(workbook[DEGRADED_SHEET], wide=False)
+    if not single:
+        _修饰表(workbook[DEGRADED_SHEET], wide=False)
 
     _确保父目录存在(path)
     workbook.save(path)
 
 
-def _写说明页(sheet, labels, info):
+def _写说明页(sheet, labels, info, single=False):
     """首个 sheet：让人拿到表就知道这是什么比对、怎么判的、颜色什么意思。"""
+    if single:
+        _写单侧说明页(sheet, labels, info)
+        return
     threshold = info.get("threshold_pct")
     lines = [
         ("性能测试结果对比", None),
@@ -154,29 +162,60 @@ def _写说明页(sheet, labels, info):
             sheet.cell(row=row_index, column=1).font = _类别字体
 
 
-def _写汇总表(sheet, comparison, labels):
-    """套级对比，按类别分组；套名超链接到该套明细表。"""
-    sheet.append(["测试套", labels[0], labels[1], "差距百分比", "是否劣化"])
+def _写单侧说明页(sheet, labels, info):
+    """单侧整理的说明页：这只是一份数据的格式化归档，没有比对结论。"""
+    lines = [
+        ("测试结果整理（单侧，无对比）", None),
+        ("", None),
+        ("【数据来源】", None),
+        ("{0}".format(labels[0]), info.get("baseline_path")),
+        ("内核版本", info.get("baseline_kernel") or "未提供"),
+        ("", None),
+        ("【说明】", None),
+        (
+            "整理模式",
+            "只提供了一份结果数据，因此本表只做格式化整理，**不含对比结果与劣化判定**",
+        ),
+        ("套级值口径", _套级口径说明),
+        ("", None),
+        ("【工作表】", None),
+        ("{0}".format(SUMMARY_SHEET), "套级值，按类别分组；套名可点击跳到该套明细"),
+        ("每套一个明细表", "该套全部子项的原始数值；spark 系列为宽表（各轮／各 docker 并列 + 平均值）"),
+    ]
+    for title, value in lines:
+        sheet.append([title, value])
+    sheet["A1"].font = Font(bold=True, size=14)
+    for row_index, (title, value) in enumerate(lines, start=1):
+        if title.startswith("【"):
+            sheet.cell(row=row_index, column=1).font = _类别字体
+
+
+def _写汇总表(sheet, comparison, labels, single=False):
+    """套级对比，按类别分组；套名超链接到该套明细表（单侧时只有一列数值）。"""
+    sheet.append(["测试套", labels[0]] if single else ["测试套", labels[0], labels[1], "差距百分比", "是否劣化"])
 
     suite_rows = comparison.suite_rows()
     for category, members in _类别(suite_rows):
-        sheet.append([category, None, None, None, None])
+        sheet.append([category, None] if single else [category, None, None, None, None])
         sheet.cell(row=sheet.max_row, column=1).font = _类别字体
         for cell in sheet[sheet.max_row]:
             cell.fill = _类别填充
         for suite_row in suite_rows:
             if _类别名(suite_row.suite) != category:
                 continue
-            sheet.append(
-                [
-                    suite_row.label,
-                    _显示值(suite_row.baseline_expr, suite_row.baseline),
+            values = [
+                suite_row.label,
+                _显示值(suite_row.baseline_expr, suite_row.baseline),
+            ]
+            if not single:
+                values += [
                     _显示值(suite_row.candidate_expr, suite_row.candidate),
                     _格式百分比(suite_row.pct),
                     "是" if suite_row.degraded else "否",
                 ]
-            )
-            _上色(sheet, sheet.max_row, sheet.max_row, 4, suite_row)
+            sheet.append(values)
+            if not single:
+                _上色(sheet, sheet.max_row, sheet.max_row, 4, suite_row)
             _加超链接(sheet.cell(row=sheet.max_row, column=1), suite_row.suite)
 
 
@@ -198,41 +237,46 @@ def _写劣化汇总(sheet, comparison, labels):
         _上色(sheet, sheet.max_row, sheet.max_row, 5, row)
 
 
-def _写明细表(sheet, suite, rows, labels):
-    sheet.append(["测试子项", labels[0], labels[1], "差距百分比", "是否劣化"])
+def _写明细表(sheet, suite, rows, labels, single=False):
+    sheet.append(["测试子项", labels[0]] if single else ["测试子项", labels[0], labels[1], "差距百分比", "是否劣化"])
     for row in rows:
         if row.suite != suite:
             continue
-        sheet.append(
-            [
-                _标签(row),
-                _测量值(row.baseline),
+        values = [_标签(row), _测量值(row.baseline)]
+        if not single:
+            values += [
                 _测量值(row.candidate),
                 _格式百分比(row.pct),
                 "是" if row.degraded else "否",
             ]
-        )
-        _上色(sheet, sheet.max_row, sheet.max_row, 4, row)
+        sheet.append(values)
+        if not single:
+            _上色(sheet, sheet.max_row, sheet.max_row, 4, row)
 
 
-def _写宽表明细(sheet, suite, measurements, rows, labels):
-    """宽表：`测试子项 | 结果A 各次测量 + 平均 | 结果B 同 | 差距百分比 | 是否劣化`。
+def _写宽表明细(sheet, suite, measurements, rows, labels, single=False):
+    """宽表：`测试子项 | 结果A 各次测量 + 平均 [| 结果B 同 | 差距百分比 | 是否劣化]`。
 
     只列出源文件里真实存在的测试项；文件自带的汇总值放在末行归档（需求方 2026-10-16），
     行序按**源文件顺序**排列（字母序会把 native_q10 排到 native_q2 前面，不可用）。
+    单侧整理时只写本侧的轮次与平均，不写对比侧与差距列。
     """
     sheet.append(
         ["测试子项"]
         + ["{0}-{1}".format(labels[0], name) for name in measurements]
         + ["{0}-avg".format(labels[0])]
-        + ["{0}-{1}".format(labels[1], name) for name in measurements]
-        + ["{0}-avg".format(labels[1])]
-        + ["差距百分比", "是否劣化"]
+        + (
+            []
+            if single
+            else ["{0}-{1}".format(labels[1], name) for name in measurements]
+            + ["{0}-avg".format(labels[1])]
+            + ["差距百分比", "是否劣化"]
+        )
     )
     # 列序：测试子项(1) | A 各轮(n) | A-avg(1) | B 各轮(n) | B-avg(1) | 差距百分比 | 是否劣化
     # 故「差距百分比」= 1 + n + 1 + n + 1 + 1 = 2n + 4。曾误写成 2n+3，导致 % 格式与分档
     # 色错加到 B-avg 列上（平均值被显示成百分数，看起来像“对比结果”）。
-    pct_column = len(measurements) * 2 + 4
+    pct_column = None if single else len(measurements) * 2 + 4
 
     by_key = {(row.item, row.sub_item): row for row in rows if row.suite == suite}
     present = {item for item, _ in by_key}
@@ -241,24 +285,28 @@ def _写宽表明细(sheet, suite, measurements, rows, labels):
         if item not in present:
             continue
         average = by_key.get((item, "avg"))
-        sheet.append(
+        values = (
             [item]
             + [_宽表值(by_key, item, name, "baseline") for name in measurements]
             + [_平均值字段(average, "baseline")]
-            + [_宽表值(by_key, item, name, "candidate") for name in measurements]
-            + [_平均值字段(average, "candidate")]
-            + [
-                _格式百分比(average.pct if average is not None else None),
-                "是" if average is not None and average.degraded else "否",
-            ]
         )
-        if average is not None:
+        if not single:
+            values += (
+                [_宽表值(by_key, item, name, "candidate") for name in measurements]
+                + [_平均值字段(average, "candidate")]
+                + [
+                    _格式百分比(average.pct if average is not None else None),
+                    "是" if average is not None and average.degraded else "否",
+                ]
+            )
+        sheet.append(values)
+        if not single and average is not None:
             _上色(sheet, sheet.max_row, sheet.max_row, pct_column, average)
 
-    _写归档汇总行(sheet, by_key, measurements, pct_column)
+    _写归档汇总行(sheet, by_key, measurements, pct_column, single)
 
 
-def _写归档汇总行(sheet, by_key, measurements, pct_column):
+def _写归档汇总行(sheet, by_key, measurements, pct_column, single=False):
     """把**文件自带的汇总值**也留在明细末行归档（需求方 2026-10-16）。
 
     - `spark`：文件末尾的汇总值（解析时已 ÷3），放在「平均」列 —— 它是三轮的合计平均值，
@@ -271,18 +319,22 @@ def _写归档汇总行(sheet, by_key, measurements, pct_column):
         return
 
     target = by_key.get(("汇总", "avg")) or by_key.get(("汇总", "值"))
-    sheet.append(
+    values = (
         ["汇总（文件自带）"]
         + [_归档值(by_key, name, "baseline") for name in measurements]
         + [_归档平均(by_key, measurements, "baseline")]
-        + [_归档值(by_key, name, "candidate") for name in measurements]
-        + [_归档平均(by_key, measurements, "candidate")]
-        + [
-            _格式百分比(target.pct if target is not None else None),
-            "是" if target is not None and target.degraded else "否",
-        ]
     )
-    if target is not None:
+    if not single:
+        values += (
+            [_归档值(by_key, name, "candidate") for name in measurements]
+            + [_归档平均(by_key, measurements, "candidate")]
+            + [
+                _格式百分比(target.pct if target is not None else None),
+                "是" if target is not None and target.degraded else "否",
+            ]
+        )
+    sheet.append(values)
+    if not single and target is not None:
         _上色(sheet, sheet.max_row, sheet.max_row, pct_column, target)
 
 

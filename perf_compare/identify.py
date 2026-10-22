@@ -89,6 +89,14 @@ def derive_name(path):
     return "-".join(tail)
 
 
+def derive_name(path):
+    """单侧（无对照）时的兜底：剥掉侧别目录后取末两级。"""
+    parts = _parts(path)
+    if not parts:
+        return None
+    return "-".join(parts[-_MIN_DEPTH:])
+
+
 def detect_kernel_version(path):
     """从结果目录里的 SPEC 报告读取内核版本；找不到返回 None。
 
@@ -107,8 +115,15 @@ def detect_kernel_version(path):
     return None
 
 
-def resolve_names(baseline, candidate):
-    """返回 ((基线名, 对比名), (基线来源, 对比来源))；配置优先。"""
+def resolve_names(baseline, candidate=None):
+    """返回 ((基线名, 对比名), (基线来源, 对比来源))；配置优先。
+
+    `candidate` 为 None 时是**单侧整理**（没有对照可比），
+    此时按「剥掉侧别名后取末两级」推导，对比名为 None。
+    """
+    if candidate is None:
+        name = baseline.name or derive_name(baseline.path)
+        return (name, None), ("配置" if baseline.name else "按目录路径推导", None)
     derived_base, derived_cand = derive_names(baseline.path, candidate.path)
     names = [derived_base, derived_cand]
     sources = ["按两侧路径差异推导", "按两侧路径差异推导"]
