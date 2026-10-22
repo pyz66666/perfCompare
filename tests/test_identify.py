@@ -25,6 +25,23 @@ def test_按两侧差异推导显示名():
     assert derive_names(BASE, CAND) == ("openEuler-24.03-64K", "openEuler-24.03-SP1-64K")
 
 
+def test_侧目录带后缀也能剥掉():
+    """`对比版本1`、`baseline-2` 这类带后缀的侧目录，同样不该进名字。"""
+    assert derive_names(
+        "/r/950/openEuler-24.03/64K/基线版本",
+        "/r/950/openEuler-24.03-SP1/64K/对比版本1",
+    ) == ("openEuler-24.03-64K", "openEuler-24.03-SP1-64K")
+    assert derive_names(
+        "/r/950/openEuler-24.03/64K/baseline-2",
+        "/r/950/openEuler-24.03-SP1/64K/candidate-3",
+    ) == ("openEuler-24.03-64K", "openEuler-24.03-SP1-64K")
+
+
+def test_golden不被误判为侧别目录():
+    """`golden` 含 old 但不是侧别目录 —— 前缀/精确匹配都要避免误伤。"""
+    assert derive_names("/r/a/golden/64K", "/r/b/golden/64K") == ("a-golden-64K", "b-golden-64K")
+
+
 def test_中间夹了日期目录也能推对():
     """旧实现按「最后两级」取，会得到 `64K-2026-10-01`；按差异推导不受影响。"""
     base = "/r/950/openEuler-24.03/64K/2026-10-01/基线"

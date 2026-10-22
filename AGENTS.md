@@ -49,6 +49,9 @@ python3 -m perf_compare --config compare.json --excel out/对比表格.xlsx
   场景化（nginx/flink_nexmark/flink_wordcount/flink_6000c/mysql_sysbench/mysql_tpcc/redis_docker/spark/spark_docker）。
   各套汇总口径**逐套不同**，在 `compare.py` 的 `_SUMMARY_RECIPES` 按套声明；口径定义见规划文档「对比项定义」。
 - **Excel 交付物已完成**（含美化：说明首页、表头样式、冻结筛选、劣化标红、严重度倒序、类别分组与超链接）。
-- **未完成**：① HTML 测试报告 + LLM 提示词（需求方原始需求里的第二份交付物）；
-  ② 内核 commitId 查询与缓存（方案已实测可行，见 ADR-0002）；③ 多对比版本（O8）。
+- **测试报告已完成**：txt + html（不含测量值、内联 SVG 图表、子项开关、精确百分比、分析提示词）；
+  支持**多候选合成一份报告**（跨版本劣化矩阵 + 持续/新引入/已恢复归纳）。
+- **单侧整理模式**：只给一份数据时只输出格式化 Excel（无对比、无报告）。
+- **未完成**：① 内核 commitId 自动查询与缓存（方案已实测可行，见 ADR-0002）；
+  ② 报告里自动生成结论段落（规则化归纳，非 LLM）。
 - **待需求方确认**：`redis_docker` 的 set/get 是自算四个 docker 还是取文件 `geom` 列（当前按自算）。

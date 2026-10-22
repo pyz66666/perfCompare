@@ -533,6 +533,101 @@ def test_命令行_配置里没有候选时也走整理模式(tmp_path, capsys):
     assert "子项劣化汇总" not in workbook.sheetnames
 
 
+def _造多版本目录(tmp_path):
+    root = tmp_path / "report" / "950"
+    made = {}
+    for os_name, side in (
+        ("openEuler-24.03", "基线版本"),
+        ("openEuler-24.03-SP1", "对比版本1"),
+        ("openEuler-24.03-SP2", "对比版本2"),
+    ):
+        target = root / os_name / "64K" / side
+        target.mkdir(parents=True)
+        shutil.copy(str(FIXTURE / "基础性能测试" / "fio.txt"), str(target / "fio.txt"))
+        made[os_name] = target
+
+    for os_name, factor in (("openEuler-24.03-SP1", 0.90), ("openEuler-24.03-SP2", 0.70)):
+        path = made[os_name] / "fio.txt"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        fields = lines[1].split()
+        fields[1] = repr(float(fields[1]) * factor)
+        lines[1] = " ".join(fields)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return made["openEuler-24.03"], made["openEuler-24.03-SP1"], made["openEuler-24.03-SP2"]
+
+
+def test_命令行_多个候选时每个候选一份表格(tmp_path, capsys):
+    base, sp1, sp2 = _造多版本目录(tmp_path)
+    config_path = tmp_path / "compare.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "baseline": {"path": str(base)},
+                "candidates": [{"path": str(sp1)}, {"path": str(sp2)}],
+                "threshold_pct": 5.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    excel = tmp_path / "表格.xlsx"
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--excel",
+            str(excel),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    # 每个候选一份，文件名带候选后缀
+    assert not excel.exists()
+    assert (tmp_path / "表格-openEuler-24.03-SP1-64K.xlsx").exists()
+    assert (tmp_path / "表格-openEuler-24.03-SP2-64K.xlsx").exists()
+    assert output.count("已写出对比表格") == 2
+
+
+def test_命令行_多个候选时只出一份报告(tmp_path, capsys):
+    base, sp1, sp2 = _造多版本目录(tmp_path)
+    config_path = tmp_path / "compare.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "baseline": {"path": str(base)},
+                "candidates": [{"path": str(sp1)}, {"path": str(sp2)}],
+                "threshold_pct": 5.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = tmp_path / "报告"
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "--excel",
+            str(tmp_path / "表格.xlsx"),
+            "--report",
+            str(report),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    assert exit_code == 0
+    # 只有一份报告（不加候选后缀）
+    assert (tmp_path / "报告.txt").exists() and (tmp_path / "报告.html").exists()
+    assert not (tmp_path / "报告-openEuler-24.03-SP1.txt").exists()
+    text = (tmp_path / "报告.txt").read_text(encoding="utf-8")
+    assert "多版本" in text and "劣化矩阵" in text
+    assert "openEuler-24.03-SP1" in text and "openEuler-24.03-SP2" in text
+
+
 def test_命令行_报告被排除的测试套(tmp_path, capsys):
     """只在一侧存在的套要明说被排除了，不能静默不出现。
 

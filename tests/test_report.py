@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 
 from perf_compare.compare import compare
-from perf_compare.report import write_report
+from perf_compare.report import write_multi_report, write_report
 from perf_compare.resultdir import load
 
 FIXTURE = Path(__file__).resolve().parent.parent / "测试结果模版"
@@ -155,3 +155,105 @@ def test_无劣化时也能出报告(tmp_path):
 
     assert "未发现" in Path(txt_path).read_text(encoding="utf-8")
     assert "无劣化项" in Path(html_path).read_text(encoding="utf-8")
+
+
+def _造多版本(tmp_path):
+    """基线 + 两个候选：fio 第 1 列在两个候选都劣化（持续），第 2 列只在 SP2 劣化（新引入）。"""
+    root = tmp_path / "multi" / "950"
+    paths = {}
+    for os_name, side in (
+        ("openEuler-24.03", "基线版本"),
+        ("openEuler-24.03-SP1", "对比版本1"),
+        ("openEuler-24.03-SP2", "对比版本2"),
+    ):
+        target = root / os_name / "64K" / side
+        target.mkdir(parents=True)
+        shutil.copy(str(FIXTURE / "基础性能测试" / "fio.txt"), str(target / "fio.txt"))
+        paths[os_name] = target
+
+    def perturb(target, item, column, factor):
+        """把某个测试项的 average 行里第 column 个子项乘 factor。"""
+        path = target / "fio.txt"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if line.startswith(item + " "):
+                fields = lines[index + 1].split()
+                fields[column] = repr(float(fields[column]) * factor)
+                lines[index + 1] = " ".join(fields)
+                break
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    sp1 = paths["openEuler-24.03-SP1"]
+    sp2 = paths["openEuler-24.03-SP2"]
+    for target in (sp1, sp2):
+        # 同一个测试项在两个候选都劣化 → 持续问题
+        perturb(target, "read_iops_blocksize", 1, 0.85)
+    # 另一个测试项只有 SP2 劣化 → SP2 新引入
+    perturb(sp2, "randread_bw_blocksize", 2, 0.80)
+    return paths["openEuler-24.03"], sp1, sp2
+
+
+def test_多版本报告_矩阵标出持续问题与新引入(tmp_path):
+    """层开子项时，矩阵按「测试项」细化，才能区分「持续问题」与「某版本新引入」。
+
+    套级矩阵会把整套的劣化归并成一项 —— 那时两个候选都劣化，结论必然是「持续问题」，
+    看不出「第 2 列只有 SP2 劣化」。所以这里用 summarize_subitems=True 看项级。
+    """
+    from perf_compare.compare import compare as _compare
+
+    base, sp1, sp2 = _造多版本(tmp_path)
+    comparisons = [
+        _compare(load(str(base)), load(str(sp1)), 5.0),
+        _compare(load(str(base)), load(str(sp2)), 5.0),
+    ]
+
+    txt_path, html_path = write_multi_report(
+        comparisons,
+        str(tmp_path / "报告"),
+        "openEuler-24.03-64K",
+        ["SP1", "SP2"],
+        {"threshold_pct": 5.0, "baseline_kernel": "6.8.0-1014"},
+        summarize_subitems=True,
+    )
+
+    text = Path(txt_path).read_text(encoding="utf-8")
+    assert "劣化矩阵" in text
+    # 两个候选都劣化的项 → 持续问题
+    assert "全部版本均劣化（持续问题）" in text
+    # 只有 SP2 劣化的项 → 点名 SP2
+    assert "SP2 出现劣化" in text
+    # 报告仍然不含测量值
+    for row in comparisons[0].rows():
+        for value in (row.baseline, row.candidate):
+            if value is not None and abs(value) >= 100:
+                assert "{:.4f}".format(value) not in text
+
+    page = Path(html_path).read_text(encoding="utf-8")
+    assert "劣化矩阵" in page and "SP1" in page and "SP2" in page
+    assert "全部版本均劣化（持续问题）" in page
+
+
+def test_多版本报告_矩阵列名能互相区分(tmp_path):
+    """候选名很长时，TXT 矩阵的列名不能被截成两个一模一样的 `openEuler…`。"""
+    from perf_compare.compare import compare as _compare
+
+    base, sp1, sp2 = _造多版本(tmp_path)
+    comparisons = [
+        _compare(load(str(base)), load(str(sp1)), 5.0),
+        _compare(load(str(base)), load(str(sp2)), 5.0),
+    ]
+
+    txt_path, _ = write_multi_report(
+        comparisons,
+        str(tmp_path / "报告"),
+        "openEuler-24.03-64K",
+        ["openEuler-24.03-SP1-64K", "openEuler-24.03-SP2-64K"],
+        {"threshold_pct": 5.0},
+        summarize_subitems=True,
+    )
+
+    text = Path(txt_path).read_text(encoding="utf-8")
+    header = next(line for line in text.splitlines() if "测试套 / 测试项" in line)
+    # 两列的列名必须不同，且能看出是 SP1 / SP2
+    assert "SP1" in header and "SP2" in header
+    assert "列名对应" in text

@@ -19,21 +19,11 @@ import re
 
 # 侧别目录名：只表示「哪一侧」，不是版本信息，推导时要剥掉。
 _SIDE_NAMES = frozenset(
-    [
-        "基线",
-        "对比",
-        "基线版本",
-        "对比版本",
-        "baseline",
-        "candidate",
-        "base",
-        "compare",
-        "before",
-        "after",
-        "old",
-        "new",
-    ]
+    ["基线", "对比", "基线版本", "对比版本", "baseline", "candidate", "base", "compare", "before", "after", "old", "new"]
 )
+# 中文侧别名常带后缀（`对比版本1`、`基线_2`），故按前缀匹配；
+# 英文只对上面这些词**精确匹配**，避免 `golden`（含 old）被误剥离。
+_SIDE_PREFIXES = ("基线", "对比", "对照", "baseline", "candidate", "before", "after")
 
 # 差异部分只剩一级、且这一级本身很短（如 `4K`、`run1`）时，补一级公共前缀做上下文，
 # 否则名字会只剩 `4K` 这种没头没脑的东西；而 `openEuler-24.03-64K` 已经够完整，不必再加料。
@@ -147,9 +137,17 @@ def resolve_kernel(result_dir):
 def _parts(path):
     """切分路径并剥掉末尾的侧别目录。"""
     parts = [part for part in os.path.normpath(path).split(os.sep) if part and part != "."]
-    if len(parts) > 1 and parts[-1].lower() in _SIDE_NAMES:
+    if len(parts) > 1 and _is_side(parts[-1]):
         parts = parts[:-1]
     return parts
+
+
+def _is_side(name):
+    """是不是侧别目录名（`对比版本1`、`baseline-2` 这类带后缀的也算）。"""
+    lowered = name.lower()
+    if lowered in _SIDE_NAMES:
+        return True
+    return any(lowered.startswith(prefix) for prefix in _SIDE_PREFIXES)
 
 
 def _join_with_context(tail, parts, common):

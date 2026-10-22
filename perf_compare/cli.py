@@ -13,6 +13,7 @@ import argparse
 import dataclasses
 import datetime
 import os
+import re
 import sys
 import traceback
 
@@ -20,7 +21,7 @@ from .compare import compare
 from .config import ResultDir, load_config
 from .excel import write_excel
 from .identify import resolve_kernel, resolve_names
-from .report import write_report
+from .report import write_multi_report, write_report
 from .resultdir import load_with_report
 
 LOG_FILE_NAME = "perf-compare.log"
@@ -75,92 +76,147 @@ def _run(args):
     inputs = _输入(args)
     if inputs is None:
         return 2
-    baseline_dir, candidate_dir, threshold = inputs
+    baseline_dir, candidate_dirs, threshold = inputs
 
     # 显示名与内核版本：命令行 > 配置文件 > 自动推导（后者按两侧路径差异推）。
-    names, name_sources = resolve_names(baseline_dir, candidate_dir)
-    name_sources = _来源(name_sources, args.baseline_name, args.candidate_name)
     base_kernel, base_kernel_src = resolve_kernel(baseline_dir)
-    base_kernel_src = "命令行" if args.baseline_kernel else base_kernel_src
+    if args.baseline_kernel:
+        base_kernel, base_kernel_src = args.baseline_kernel, "命令行"
 
-    if candidate_dir is None:
-        return _整理(baseline_dir, names[0], name_sources[0], base_kernel, base_kernel_src, args)
-
-    labels = (names[0] or "结果A", names[1] or "结果B")
-    cand_kernel, cand_kernel_src = resolve_kernel(candidate_dir)
-    kernels = _来源(
-        (base_kernel_src, cand_kernel_src), args.baseline_kernel, args.candidate_kernel
-    )
-    _交代身份("基线", baseline_dir.path, labels[0], name_sources[0], base_kernel, kernels[0])
-    _交代身份("对比", candidate_dir.path, labels[1], name_sources[1], cand_kernel, kernels[1])
-    _告警识别(labels, name_sources)
-    # 两侧是同一个目录时，结果必然全为 0 —— 那是最危险的假结论（看起来「毫无劣化」）。
-    _同一个目录(baseline_dir.path, candidate_dir.path)
+    if not candidate_dirs:
+        names, name_sources = resolve_names(baseline_dir)
+        source = "命令行" if args.baseline_name else name_sources[0]
+        return _整理(
+            baseline_dir, baseline_dir.name or names[0], source, base_kernel, base_kernel_src, args
+        )
 
     baseline, baseline_report = load_with_report(baseline_dir.path)
-    candidate, candidate_report = load_with_report(candidate_dir.path)
-
     # 主动交代「读到什么、缺什么」—— 结果目录里缺失的套会被静默跳过，
     # 不打印出来的话，用户无从判断是数据不全、路径填错，还是文件格式变了。
     _report_read(baseline_dir.path, baseline_report, "基线")
-    _report_read(candidate_dir.path, candidate_report, "对比")
 
-    comparison = compare(baseline, candidate, threshold)
-    rows = comparison.rows()
+    pairs = []
+    for candidate_dir in candidate_dirs:
+        candidate, candidate_report = load_with_report(candidate_dir.path)
+        _report_read(candidate_dir.path, candidate_report, "对比")
+        comparison = compare(baseline, candidate, threshold)
+        if not comparison.rows():
+            return _什么都没读到()
+        pairs.append((candidate_dir, comparison))
 
-    if not rows:
-        return _什么都没读到()
+    # 逐个候选交代身份；基线名取第一对推导出的名字（同一个目录，各对结果应一致）。
+    labels = []
+    sources = []
+    for index, (candidate_dir, _) in enumerate(pairs):
+        names, name_sources = resolve_names(baseline_dir, candidate_dir)
+        if index == 0:
+            base_label = baseline_dir.name or names[0] or "结果A"
+            base_source = "命令行" if args.baseline_name else name_sources[0]
+        if candidate_dir.name:
+            labels.append(candidate_dir.name)
+            sources.append("命令行" if args.candidate_name and len(pairs) == 1 else "配置")
+        else:
+            labels.append(names[1] or "结果B")
+            sources.append(
+                "命令行" if args.candidate_name and len(pairs) == 1 else name_sources[1]
+            )
 
-    excluded = comparison.excluded_suites()
-    if excluded:
-        # 只在一侧存在的套不参与对比，但必须说明，不能静默不出现。
-        print(
-            "只在一侧出现、未纳入对比的测试套：{0}（只比对两侧都包含的套）".format(excluded)
-        )
-
-    # 两侧数据一模一样（拷贝、或路径填成同一处）时，全 0 的表会被误读成「没有劣化」。
-    if all(row.pct in (0, None) for row in rows):
-        print(
-            "    ⚠ 两侧数据完全一致（所有子项差距都是 0）—— 请确认两个 path 是否指向了同一份数据。"
-        )
-
-    write_excel(
-        comparison,
-        args.excel,
-        labels,
-        {
-            "baseline_path": baseline_dir.path,
-            "candidate_path": candidate_dir.path,
-            "threshold_pct": threshold,
-            "excluded_suites": excluded,
-        },
-    )
     print(
-        "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(
-            args.excel,
-            len(rows),
-            sum(1 for row in rows if row.baseline is None or row.candidate is None),
-            sum(1 for row in rows if row.degraded),
+        "基线 {0}：显示名 {1}（{2}）；内核版本 {3}（{4}）".format(
+            baseline_dir.path, base_label, base_source, base_kernel or "未提供", base_kernel_src
         )
     )
+    for label, source, (candidate_dir, _) in zip(labels, sources, pairs):
+        kernel, kernel_source = resolve_kernel(candidate_dir)
+        if args.candidate_kernel and len(pairs) == 1:
+            kernel, kernel_source = args.candidate_kernel, "命令行"
+        _交代身份("对比", candidate_dir.path, label, source, kernel, kernel_source)
+
+    _告警识别((base_label,) + tuple(labels), (base_source,) + tuple(sources))
+    for candidate_dir, comparison in pairs:
+        # 两侧是同一个目录时，结果必然全为 0 —— 那是最危险的假结论（看起来「毫无劣化」）。
+        _同一个目录(baseline_dir.path, candidate_dir.path)
+        if all(row.pct in (0, None) for row in comparison.rows()):
+            print(
+                "    ⚠ {0} 与基线数据完全一致（所有子项差距都是 0）—— "
+                "请确认两个 path 是否指向了同一份数据。".format(
+                    candidate_dir.name or candidate_dir.path
+                )
+            )
+
+    # Excel：单候选沿用原文件名；多候选时每个候选一份，文件名加候选后缀。
+    for label, (candidate_dir, comparison) in zip(labels, pairs):
+        path = _每份路径(args.excel, label, len(pairs))
+        rows = comparison.rows()
+        excluded = comparison.excluded_suites()
+        if excluded:
+            # 只在一侧存在的套不参与对比，但必须说明，不能静默不出现。
+            print(
+                "只在一侧出现、未纳入对比的测试套：{0}（只比对两侧都包含的套）".format(excluded)
+            )
+        kernel, _ = resolve_kernel(candidate_dir)
+        write_excel(
+            comparison,
+            path,
+            (base_label, label),
+            {
+                "baseline_path": baseline_dir.path,
+                "candidate_path": candidate_dir.path,
+                "threshold_pct": threshold,
+                "excluded_suites": excluded,
+            },
+        )
+        print(
+            "已写出对比表格：{0}（比对面 {1} 条，单边缺失 {2} 条，劣化 {3} 条）".format(
+                path,
+                len(rows),
+                sum(1 for row in rows if row.baseline is None or row.candidate is None),
+                sum(1 for row in rows if row.degraded),
+            )
+        )
 
     if args.report:
-        txt_path, html_path = write_report(
-            comparison,
-            args.report,
-            labels,
-            {
-                "threshold_pct": threshold,
-                "baseline_kernel": base_kernel,
-                "candidate_kernel": cand_kernel,
-                "baseline_commit": baseline_dir.commit_id,
-                "candidate_commit": candidate_dir.commit_id,
-            },
-            summarize_subitems=args.summarize_subitems,
-        )
+        if len(pairs) == 1:
+            candidate_dir, comparison = pairs[0]
+            cand_kernel, _ = resolve_kernel(candidate_dir)
+            txt_path, html_path = write_report(
+                comparison,
+                args.report,
+                (base_label, labels[0]),
+                {
+                    "threshold_pct": threshold,
+                    "baseline_kernel": base_kernel,
+                    "candidate_kernel": cand_kernel,
+                    "baseline_commit": baseline_dir.commit_id,
+                    "candidate_commit": candidate_dir.commit_id,
+                },
+                summarize_subitems=args.summarize_subitems,
+            )
+        else:
+            # 多候选：只出一份报告，核心是「跨候选劣化矩阵」。
+            txt_path, html_path = write_multi_report(
+                [comparison for _, comparison in pairs],
+                args.report,
+                base_label,
+                labels,
+                {
+                    "threshold_pct": threshold,
+                    "baseline_kernel": base_kernel,
+                },
+                summarize_subitems=args.summarize_subitems,
+            )
         print("已写出测试报告：{0}、{1}（不含测量值）".format(txt_path, html_path))
 
     return 0
+
+
+def _每份路径(path, label, total):
+    """多候选时给文件名加候选后缀（`表格.xlsx` → `表格-<候选名>.xlsx`）。"""
+    if total == 1:
+        return path
+    stem, extension = os.path.splitext(path)
+    safe = re.sub(r'[\\/:*?"<>|\s]+', "-", label).strip("-")
+    return "{0}-{1}{2}".format(stem, safe, extension)
 
 
 def _整理(result_dir, name, name_source, kernel, kernel_source, args):
@@ -216,7 +272,7 @@ def _什么都没读到():
 def _输入(args):
     """装配两侧输入：配置文件 或 两个目录（二选一），并应用命令行覆盖。
 
-    成功返回 (基线 ResultDir, 对比 ResultDir, 阈值)；参数组合不合法时打印原因并返回 None。
+    成功返回 (基线 ResultDir, 候选 ResultDir 列表, 阈值)；参数组合不合法时打印原因并返回 None。
     """
     use_config = bool(args.config)
     use_dirs = bool(args.baseline or args.candidate)
@@ -238,27 +294,22 @@ def _输入(args):
         config = load_config(args.config)
         # 多个对比结果目录时 Excel 的行列该怎么组织尚未确定（阻塞项 O8），
         # 因此首版只接受恰好一个对比目录，而不是自行发明一种布局。
-        if len(config.candidates) > 1:
-            print(
-                "首版只支持一个对比结果目录，配置里给了 %d 个。" % len(config.candidates),
-                file=sys.stderr,
-            )
-            return None
-        # 没有候选 = 单侧整理模式（只格式化，不比对）。
-        candidate_dir = config.candidates[0] if config.candidates else None
+        # 没有候选 = 单侧整理模式（只格式化，不比对）；多个候选 = 多版本对比。
+        candidate_dirs = list(config.candidates)
         baseline_dir = config.baseline
         threshold = config.threshold_pct
     else:
         baseline_dir = ResultDir(path=args.baseline)
-        candidate_dir = ResultDir(path=args.candidate) if args.candidate else None
+        candidate_dirs = [ResultDir(path=args.candidate)] if args.candidate else []
         threshold = DEFAULT_THRESHOLD
 
     baseline_dir = _覆盖(baseline_dir, args.baseline_name, args.baseline_kernel)
-    if candidate_dir is not None:
-        candidate_dir = _覆盖(candidate_dir, args.candidate_name, args.candidate_kernel)
+    # 命令行只给一个对比名时，只在恰好一个候选时生效（多个候选请用配置文件里的 name）。
+    if len(candidate_dirs) == 1:
+        candidate_dirs = [_覆盖(candidate_dirs[0], args.candidate_name, args.candidate_kernel)]
     if args.threshold is not None:
         threshold = args.threshold
-    return baseline_dir, candidate_dir, threshold
+    return baseline_dir, candidate_dirs, threshold
 
 
 def _覆盖(result_dir, name, kernel):

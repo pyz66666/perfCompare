@@ -573,3 +573,463 @@ def _确保父目录存在(path):
     parent = os.path.dirname(path)
     if parent and not os.path.isdir(parent):
         os.makedirs(parent)
+
+
+# ——— 多候选（多版本）报告 ———
+#
+# 语义：每个候选都与**同一个基线**各比一次（不是相邻版本链式对比）。
+# 报告的独特价值在「跨候选矩阵」：同一个劣化项在哪些版本上出现，
+# 据此区分「持续问题 / 某版本新引入 / 后续已恢复」。
+
+
+def write_multi_report(
+    comparisons,
+    base_path,
+    baseline_label,
+    candidate_labels,
+    info=None,
+    summarize_subitems=False,
+):
+    """写多候选报告（一份 txt + 一份 html）。
+
+    `comparisons` 与 `candidate_labels` 一一对应，顺序即配置里的候选顺序（当作时间序）。
+    """
+    labels = tuple(candidate_labels)
+    if len(comparisons) != len(labels):
+        raise ValueError("comparisons 与 candidate_labels 数量不一致")
+    info = dict(info or {})
+    level = _ITEM if summarize_subitems else _SUITE
+
+    per_candidate = [
+        (_item_findings(comparison) if summarize_subitems else _suite_findings(comparison))
+        for comparison in comparisons
+    ]
+
+    txt_path = base_path + TXT_SUFFIX
+    html_path = base_path + HTML_SUFFIX
+    _确保父目录存在(txt_path)
+    with open(txt_path, "w", encoding="utf-8") as handle:
+        handle.write(
+            _render_multi_txt(per_candidate, labels, baseline_label, info, level, comparisons)
+        )
+    with open(html_path, "w", encoding="utf-8") as handle:
+        handle.write(
+            _render_multi_html(per_candidate, labels, baseline_label, info, level, comparisons)
+        )
+    return txt_path, html_path
+
+
+def _matrix_keys(per_candidate, level):
+    """所有候选出现过的劣化项（取并集），按最严重程度倒序。"""
+    worst = {}
+    for entries in per_candidate:
+        for entry in entries:
+            key = _key_of(entry, level)
+            worst[key] = max(worst.get(key, 0.0), entry["magnitude"])
+    return [key for key, _ in sorted(worst.items(), key=lambda pair: -pair[1])]
+
+
+def _key_of(entry, level):
+    if level == _SUITE:
+        return (entry["suite"],)
+    return (entry["suite"], entry["item"])
+
+
+def _key_label(key, level):
+    return key[0] if level == _SUITE else "{0} / {1}".format(key[0], key[1])
+
+
+def _lookup(entries, level):
+    return {_key_of(entry, level): entry for entry in entries}
+
+
+def _归纳(degraded_labels, all_labels):
+    """跨候选归纳：全部劣化=持续问题；部分=那些版本引入；后面恢复正常=已恢复。"""
+    if not degraded_labels:
+        return ""
+    if len(degraded_labels) == len(all_labels):
+        return "全部版本均劣化（持续问题）"
+    text = "{0} 出现劣化".format("、".join(degraded_labels))
+    last = all_labels[-1]
+    if last not in degraded_labels and len(all_labels) > 1:
+        text += "，后续已恢复"
+    return text
+
+
+def _render_multi_txt(per_candidate, labels, baseline_label, info, level, comparisons):
+    stamp = info.get("generated_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    threshold = info.get("threshold_pct")
+    totals = [len(entries) for entries in per_candidate]
+    keys = _matrix_keys(per_candidate, level)
+
+    lines = [
+        "性能测试结果对比报告（多版本）",
+        "=" * 30,
+        "",
+        "对比对象：{0}（基线） vs {1}".format(baseline_label, "、".join(labels)),
+        "内核版本：{0}".format(_标(info.get("baseline_kernel"))),
+        "劣化阈值：{0}".format(_标(threshold, "{}%")),
+        "生成时间：{0}".format(stamp),
+        "",
+        "一、跨版本概览",
+        "",
+        "   {0}{1}{2}".format(
+            _补齐("候选版本", 30), _补齐("已比对套数", 14), "劣化项数"
+        ),
+        "   " + "-" * 56,
+    ]
+    for index, label in enumerate(labels):
+        lines.append(
+            "   {0}{1}{2}".format(
+                _补齐(_截断(label, 28), 30),
+                _补齐(str(_套数(comparisons[index])), 14),
+                totals[index],
+            )
+        )
+
+    lines += ["", "二、劣化矩阵", ""]
+    if not keys:
+        lines.append("   各候选均未发现超过阈值的劣化项。")
+    else:
+        # 候选名很长时直接截断会截出两列同名（`openEuler…`），必须先去掉公共前缀再截尾。
+        shorts = _short_labels(labels, 12)
+        header = "   {0}".format(_补齐(_水平头[level], 34))
+        for short in shorts:
+            header += _补齐(short, 12)
+        lines.append(header + "结论")
+        lines.append("   " + "-" * (34 + 12 * len(labels) + 20))
+        lookups = [_lookup(entries, level) for entries in per_candidate]
+        for key in keys:
+            row = "   {0}".format(_补齐(_截断(_key_label(key, level), 32), 34))
+            degraded_labels = []
+            for index, label in enumerate(labels):
+                entry = lookups[index].get(key)
+                if entry is None:
+                    row += _补齐("—", 12)
+                else:
+                    degraded_labels.append(label)
+                    row += _补齐(entry["amount"] or entry["grade"], 12)
+            short_of = dict(zip(labels, shorts))
+            lines.append(
+                row
+                + _归纳([short_of[label] for label in degraded_labels], shorts)
+            )
+        if shorts != list(labels):
+            lines.append("")
+            lines.append(
+                "   列名对应：{0}".format(
+                    "；".join("{0} = {1}".format(a, b) for a, b in zip(shorts, labels))
+                )
+            )
+
+    lines += ["", "三、按候选看明细", ""]
+    for index, label in enumerate(labels):
+        lines.append("   ▸ {0}（与基线 {1} 对比）".format(label, baseline_label))
+        entries = per_candidate[index]
+        if not entries:
+            lines.append("     未发现超过阈值的劣化项。")
+        else:
+            for order, entry in enumerate(entries, 1):
+                lines.append(
+                    "     {0} {1} —— {2}，{3}".format(
+                        order,
+                        _label(entry, level),
+                        entry["direction"],
+                        _degree(entry),
+                    )
+                )
+        lines.append("")
+
+    lines += [
+        "四、说明",
+        "",
+        "   1. 每个候选都与**同一个基线**各比一次（不是相邻版本链式对比）。",
+        "   2. 本报告**不含任何具体测量值**，可直接对外使用。",
+        "   3. 劣化程度按「往变差方向的幅度」分级：严重 ≥50%，明显 ≥20%，轻微 > 阈值。",
+        "   4. 矩阵「结论」列的含义：全部版本都劣化 = 持续问题；只有部分版本劣化 = 那些版本引入；",
+        "      先劣化后正常 = 已恢复。",
+        "",
+        "五、分析提示词（可直接交给大模型继续分析）",
+        "",
+        "   你是一名性能工程专家。以下是某次性能测试的**多版本**对比结论（数据已脱敏，不含测量值）：",
+        "   - 基线：{0}；候选：{1}".format(baseline_label, "、".join(labels)),
+        "   - 劣化阈值：{0}".format(_标(threshold, "{}%")),
+        "   - 各候选劣化项数：{0}".format(
+            "、".join("{0} {1} 项".format(label, total) for label, total in zip(labels, totals))
+        ),
+        "   - 劣化矩阵（项 / 各候选程度 / 归纳）：",
+    ]
+    lookups = [_lookup(entries, level) for entries in per_candidate]
+    for key in keys:
+        cells = []
+        degraded_labels = []
+        for index, label in enumerate(labels):
+            entry = lookups[index].get(key)
+            if entry is None:
+                cells.append("—")
+            else:
+                degraded_labels.append(label)
+                cells.append(entry["amount"] or entry["grade"])
+        lines.append(
+            "     · {0}：{1}（{2}）".format(
+                _key_label(key, level), " / ".join(cells), _归纳(degraded_labels, labels)
+            )
+        )
+    lines += [
+        "   请据此输出：① 哪些是长期存在的持续问题、哪些是某个版本新引入的回归；",
+        "   ② 各问题可能的共性原因；③ 按影响面与严重程度排序的排查优先级；④ 建议的验证方式。",
+        "   注意：不要编造任何具体测量数值。",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _short_labels(labels, width=12):
+    """给候选名取「能互相区分」的短名：去掉公共前缀、截尾。
+
+    直接用 _截断 从头截，长名字会截成一模一样的 `openEuler…`，两列无法区分。
+    """
+    labels = list(labels)
+    # 公共前缀只能切到「最后一个分隔符」为止，否则会把 `SP1`/`SP2` 共有的 `SP` 也切掉，
+    # 剩下 `1-64K`/`2-64K` —— 虽然可区分，但看不出是哪个版本。
+    common = os.path.commonprefix(labels)
+    boundary = max(common.rfind(sep) for sep in ("-", "_", "/", " "))
+    common = common[: boundary + 1] if boundary > 0 else ""
+    shorts = []
+    for label in labels:
+        text = label[len(common):].lstrip("-_ ") if common else label
+        if not text:
+            text = label
+        if _宽度(text) > width:
+            text = "…" + _尾部(text, width - 1)
+        shorts.append(text)
+    # 去重失败就退回全名，宁可宽也不能两列同名。
+    return shorts if len(set(shorts)) == len(shorts) else labels
+
+
+def _尾部(text, width):
+    """从末尾取字符，直到显示宽度不超过 width。"""
+    out, used = [], 0
+    for char in reversed(text):
+        step = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        if used + step > width:
+            break
+        out.append(char)
+        used += step
+    return "".join(reversed(out))
+
+
+def _套数(comparison):
+    return len({row.suite for row in comparison.rows()})
+
+
+def _render_multi_html(per_candidate, labels, baseline_label, info, level, comparisons):
+    stamp = info.get("generated_at") or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    threshold = info.get("threshold_pct")
+    totals = [len(entries) for entries in per_candidate]
+    keys = _matrix_keys(per_candidate, level)
+    lookups = [_lookup(entries, level) for entries in per_candidate]
+
+    cards = "".join(
+        '<div class="card"><div class="k">{0}</div><div class="v">{1}</div></div>'.format(
+            html.escape(label), total
+        )
+        for label, total in zip(labels, totals)
+    )
+
+    matrix_rows = []
+    for key in keys:
+        cells = []
+        degraded_labels = []
+        for index, label in enumerate(labels):
+            entry = lookups[index].get(key)
+            if entry is None:
+                cells.append("<td class='dash'>—</td>")
+            else:
+                degraded_labels.append(label)
+                cells.append(
+                    "<td><span class='badge g-{0}'>{1}</span>{2}</td>".format(
+                        _grade_slug(entry["grade"]),
+                        html.escape(entry["grade"]),
+                        " <span class='amount'>{0}</span>".format(html.escape(entry["amount"]))
+                        if entry["amount"]
+                        else "",
+                    )
+                )
+        verdict = _归纳(degraded_labels, labels)
+        matrix_rows.append(
+            "<tr><td>{0}</td>{1}<td class='verdict'>{2}</td></tr>".format(
+                html.escape(_key_label(key, level)), "".join(cells), html.escape(verdict)
+            )
+        )
+    if not matrix_rows:
+        matrix_rows.append(
+            "<tr><td colspan='{0}' class='empty'>各候选均未发现超过阈值的劣化项</td></tr>".format(
+                len(labels) + 2
+            )
+        )
+
+    head_cells = "".join("<th>{0}</th>".format(html.escape(label)) for label in labels)
+
+    details = []
+    for index, label in enumerate(labels):
+        entries = per_candidate[index]
+        body = _table_rows(entries, level) if entries else (
+            "<tr><td colspan='4' class='empty'>未发现超过阈值的劣化项</td></tr>"
+        )
+        details.append(
+            """
+  <h3>{0}</h3>
+  <table>
+    <thead><tr><th style="width:56px">序号</th><th>{1}</th>
+    <th style="width:110px">方向</th><th style="width:190px">劣化程度</th></tr></thead>
+    <tbody>{2}</tbody>
+  </table>""".format(
+                html.escape(label), html.escape(_水平头[level]), body
+            )
+        )
+
+    return """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>性能测试结果对比报告（多版本）</title>
+<style>
+  :root {{ --ink:#1f2733; --muted:#6b7684; --line:#e3e8ef; --severe:#c0392b; --obvious:#e67e22; --slight:#c9a227; }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; padding:32px 20px 60px; background:#f6f8fb; color:var(--ink);
+         font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }}
+  .wrap {{ max-width: 1080px; margin: 0 auto; }}
+  header {{ background:linear-gradient(135deg,#1f4e79,#2e75b6); color:#fff; border-radius:14px;
+            padding:26px 30px; box-shadow:0 8px 24px rgba(31,78,121,.18); }}
+  header h1 {{ margin:0 0 6px; font-size:24px; }}
+  header .sub {{ opacity:.9; font-size:14px; }}
+  .cards {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:14px; margin:20px 0; }}
+  .card {{ background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 18px; }}
+  .card .k {{ color:var(--muted); font-size:13px; }}
+  .card .v {{ font-size:26px; font-weight:700; margin-top:4px; }}
+  section {{ background:#fff; border:1px solid var(--line); border-radius:12px; padding:22px 24px; margin-bottom:18px; }}
+  h2 {{ font-size:17px; margin:0 0 14px; padding-left:10px; border-left:4px solid #2e75b6; }}
+  h3 {{ font-size:15px; margin:18px 0 10px; color:#2e75b6; }}
+  table {{ width:100%; border-collapse:collapse; font-size:14px; }}
+  th,td {{ text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); }}
+  th {{ color:var(--muted); font-weight:600; background:#fbfcfe; }}
+  tr:hover td {{ background:#fbfcfe; }}
+  .badge {{ display:inline-block; padding:2px 10px; border-radius:999px; font-size:12.5px; color:#fff; }}
+  .g-severe {{ background:var(--severe); }}
+  .g-obvious {{ background:var(--obvious); }}
+  .g-slight {{ background:var(--slight); }}
+  .amount {{ color:var(--muted); font-size:12.5px; }}
+  .dash {{ color:#c3cad4; }}
+  .verdict {{ color:#1f4e79; font-size:13px; }}
+  .empty {{ color:var(--muted); text-align:center; padding:22px; }}
+  .meta {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px 24px; font-size:14px; }}
+  .meta .k {{ color:var(--muted); min-width:76px; }}
+  details {{ margin-top:6px; }}
+  summary {{ cursor:pointer; color:#2e75b6; font-size:14px; }}
+  pre {{ background:#f7f9fc; border:1px solid var(--line); border-radius:10px; padding:14px;
+         white-space:pre-wrap; word-break:break-word; font-size:13px; }}
+  footer {{ color:var(--muted); font-size:12.5px; text-align:center; margin-top:26px; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>性能测试结果对比报告（多版本）</h1>
+    <div class="sub">基线 {baseline} &nbsp;vs&nbsp; {cands} &nbsp;·&nbsp; 阈值 {threshold}</div>
+  </header>
+
+  <div class="cards">
+    <div class="card"><div class="k">候选版本</div><div class="v">{count}</div></div>
+    {cards}
+  </div>
+
+  <section>
+    <h2>劣化矩阵</h2>
+    <p style="color:#6b7684;font-size:13.5px;margin:0 0 12px">
+      「结论」列含义：全部版本都劣化 = 持续问题；只有部分版本劣化 = 那些版本引入；先劣化后正常 = 已恢复。
+    </p>
+    <table>
+      <thead><tr><th>{head_label}</th>{head_cells}<th>结论</th></tr></thead>
+      <tbody>
+{matrix_rows}
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>按候选看明细</h2>
+    {details}
+  </section>
+
+  <section>
+    <h2>系统标识</h2>
+    <div class="meta">
+      <div><span class="k">基线</span><span>{baseline}</span></div>
+      <div><span class="k">内核版本</span><span>{kernel}</span></div>
+      <div><span class="k">劣化阈值</span><span>{threshold}</span></div>
+      <div><span class="k">生成时间</span><span>{stamp}</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>说明</h2>
+    <p>每个候选都与<strong>同一个基线</strong>各比一次（不是相邻版本链式对比）。本报告<strong>不含任何具体测量值</strong>。</p>
+    <details>
+      <summary>分析提示词（可直接交给大模型继续分析）</summary>
+      <pre>{prompt}</pre>
+    </details>
+  </section>
+
+  <footer>本页由 perf-compare 生成 · 数据已脱敏</footer>
+</div>
+</body>
+</html>
+""".format(
+        baseline=html.escape(baseline_label),
+        cands=html.escape("、".join(labels)),
+        threshold=html.escape(_标(threshold, "{}%")),
+        count=len(labels),
+        cards=cards,
+        head_label=html.escape(_水平头[level]),
+        head_cells=head_cells,
+        matrix_rows="\n".join(matrix_rows),
+        details="".join(details),
+        kernel=html.escape(_标(info.get("baseline_kernel"))),
+        stamp=html.escape(stamp),
+        prompt=html.escape(_multi_prompt(per_candidate, labels, baseline_label, info, level)),
+    )
+
+
+def _multi_prompt(per_candidate, labels, baseline_label, info, level):
+    totals = [len(entries) for entries in per_candidate]
+    lookups = [_lookup(entries, level) for entries in per_candidate]
+    lines = [
+        "你是一名性能工程专家。以下是某次性能测试的多版本对比结论（数据已脱敏，不含测量值）：",
+        "基线：{0}；候选：{1}".format(baseline_label, "、".join(labels)),
+        "各候选劣化项数：{0}".format(
+            "、".join("{0} {1} 项".format(label, total) for label, total in zip(labels, totals))
+        ),
+        "劣化矩阵（项 / 各候选程度 / 归纳）：",
+    ]
+    for key in _matrix_keys(per_candidate, level):
+        cells, degraded_labels = [], []
+        for index, label in enumerate(labels):
+            entry = lookups[index].get(key)
+            if entry is None:
+                cells.append("—")
+            else:
+                degraded_labels.append(label)
+                cells.append(entry["amount"] or entry["grade"])
+        lines.append(
+            "  · {0}：{1}（{2}）".format(
+                _key_label(key, level), " / ".join(cells), _归纳(degraded_labels, labels)
+            )
+        )
+    lines += [
+        "请据此输出：① 哪些是长期存在的持续问题、哪些是某个版本新引入的回归；",
+        "② 各问题可能的共性原因；③ 按影响面与严重程度排序的排查优先级；④ 建议的验证方式。",
+        "注意：不要编造任何具体测量数值。",
+    ]
+    return "\n".join(lines)
