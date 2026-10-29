@@ -13,7 +13,8 @@ from .spark_items import SPARK_ITEMS
 
 # 测试套 → (子目录, 文件名, 解析器)。目前接入长表族的六个基础套 + 日志正则族的 mysql_tpcc；
 # 其余套（SPEC CPU2017 CSV、场景化 JSON / 分组文本 / 裸数字列）在后续任务里逐个加入。
-# 注意 unixbench 的文件名带一个前导空格 —— 这是上游产物的真实情况，不要"顺手修掉"。
+# 注意 unixbench 的样例文件名带一个前导空格。这来自样模数据，真实环境未必有，
+# 所以 `_locate` 按**去掉首尾空白**比较文件名：两种写法都能找到，不因一个空格漏整套。
 _SUITE_FILES = {
     "stream": ("基础性能测试", ("stream.txt",), None),
     "fio": ("基础性能测试", ("fio.txt",), None),
@@ -132,11 +133,33 @@ def _locate_all(directory, sub_dir, file_names):
 
 
 def _locate(directory, sub_dir, file_name):
-    """定位一个结果文件；先试类别子目录，再试平铺。找不到返回 None。"""
-    for relative in (os.path.join(sub_dir, file_name), file_name):
-        path = os.path.join(directory, relative)
+    """定位一个结果文件；先试类别子目录，再试平铺。找不到返回 None。
+
+    文件名按**去掉首尾空白**后比较：样例里 `unixbench-master.txt` 带一个前导空格，
+    真实环境通常没有 —— 只认一种就会整套漏读。
+    """
+    for folder in (os.path.join(directory, sub_dir), directory):
+        path = os.path.join(folder, file_name)
         if os.path.isfile(path):
             return path
+        found = _find_ignoring_spaces(folder, file_name)
+        if found is not None:
+            return found
+    return None
+
+
+def _find_ignoring_spaces(folder, file_name):
+    """在目录里找「去掉首尾空白后同名」的文件（兼容文件名的前导/尾随空格）。"""
+    target = file_name.strip()
+    try:
+        entries = os.listdir(folder)
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.strip() == target:
+            path = os.path.join(folder, entry)
+            if os.path.isfile(path):
+                return path
     return None
 
 

@@ -170,6 +170,39 @@ def test_加载结果目录_解析speccpu四份报告(tmp_path):
         results.value("speccpu2017_fp_single", "507.cactuBSSN_r", "")
 
 
+def test_文件名带不带前导空格都能识别(tmp_path):
+    """样例里 unixbench 的文件名带一个前导空格，真实环境里通常没有。
+
+    只认一种会整套漏读（用户实际踩到），必须两种都能找到。
+    """
+    target = tmp_path / "基础性能测试"
+    target.mkdir()
+    shutil.copy(
+        str(FIXTURE / "基础性能测试" / " unixbench-master.txt"),
+        str(target / "unixbench-master.txt"),      # 不带空格
+    )
+
+    results = load(str(tmp_path))
+
+    suites = {suite for suite, _, _, _ in results.observations()}
+    assert "unixbench" in suites
+
+
+def test_文件名带前导空格时也仍然能识别(tmp_path):
+    """样例原样（带空格）不能因为这次改动反而读不到。"""
+    target = tmp_path / "基础性能测试"
+    target.mkdir()
+    shutil.copy(
+        str(FIXTURE / "基础性能测试" / " unixbench-master.txt"),
+        str(target / " unixbench-master.txt"),     # 带空格
+    )
+
+    results = load(str(tmp_path))
+
+    suites = {suite for suite, _, _, _ in results.observations()}
+    assert "unixbench" in suites
+
+
 def test_加载结果目录_解析spark与spark_docker(tmp_path):
     """`spark.out` = 103 项 × 3 轮 + 1 个汇总（汇总值需 ÷3 得到单轮平均）；
     `spark_docker.out0/1/2` = 三个文件各代表一个 docker（一套多文件）。
