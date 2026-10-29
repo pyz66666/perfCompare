@@ -628,6 +628,44 @@ def test_命令行_多个候选时只出一份报告(tmp_path, capsys):
     assert "openEuler-24.03-SP1" in text and "openEuler-24.03-SP2" in text
 
 
+def test_命令行_baseline指向配置文件时明确报错(tmp_path, capsys):
+    """把 compare.json 当作 --baseline 传入是常见误解，必须明确指路，而不是「读到 0 个套」。"""
+    config_path = tmp_path / "compare.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "--baseline",
+            str(config_path),
+            "--excel",
+            str(tmp_path / "整理.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    err = capsys.readouterr().err
+    assert exit_code == 2
+    assert "--config" in err and "结果目录" in err
+
+
+def test_命令行_目录不存在时明确报错(tmp_path, capsys):
+    exit_code = main(
+        [
+            "--baseline",
+            str(tmp_path / "不存在的目录"),
+            "--excel",
+            str(tmp_path / "整理.xlsx"),
+            "--log-dir",
+            str(tmp_path / "logs"),
+        ]
+    )
+
+    err = capsys.readouterr().err
+    assert exit_code == 2
+    assert "不存在" in err
+
+
 def test_命令行_报告被排除的测试套(tmp_path, capsys):
     """只在一侧存在的套要明说被排除了，不能静默不出现。
 

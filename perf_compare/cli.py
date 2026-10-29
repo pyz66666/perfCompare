@@ -54,11 +54,17 @@ def _build_parser():
     parser.add_argument("--config", help="配置文件路径（JSON）；与 --baseline/--candidate 二选一")
     parser.add_argument(
         "--baseline",
-        help="基线结果目录；与 --config 二选一。只给这一项 = 整理模式（不对比）",
+        help=(
+            "基线结果目录的路径（相当于配置文件里的 baseline.path）；"
+            "与 --config 二选一。只给这一项 = 整理模式（不对比）"
+        ),
     )
     parser.add_argument(
         "--candidate",
-        help="对比结果目录；与 --config 二选一。**不给则进入整理模式**：只格式化，不对比、不出报告",
+        help=(
+            "对比结果目录的路径（相当于配置文件里的 candidates[].path）；"
+            "与 --config 二选一。不给则进入整理模式：只格式化，不对比、不出报告"
+        ),
     )
     parser.add_argument("--baseline-name", help="基线显示名（覆盖配置与自动推导）")
     parser.add_argument("--candidate-name", help="对比显示名（覆盖配置与自动推导）")
@@ -318,11 +324,35 @@ def _输入(args):
 
     baseline_dir = _覆盖(baseline_dir, args.baseline_name, args.baseline_kernel)
     # 命令行只给一个对比名时，只在恰好一个候选时生效（多个候选请用配置文件里的 name）。
+    # 路径必须真的是「结果目录」：把 compare.json 或某个结果文件填进来是常见误解，
+    # 早点说清楚，别让人对着一句「读到 0 个测试套」猜。
+    for role, path in [("基线", baseline_dir.path)] + [("对比", d.path) for d in candidate_dirs]:
+        problem = _路径问题(path)
+        if problem:
+            print("{0} {1}：{2}".format(role, path, problem), file=sys.stderr)
+            return None
+
     if len(candidate_dirs) == 1:
         candidate_dirs = [_覆盖(candidate_dirs[0], args.candidate_name, args.candidate_kernel)]
     if args.threshold is not None:
         threshold = args.threshold
     return baseline_dir, candidate_dirs, threshold
+
+
+def _路径问题(path):
+    """检查 `--baseline/--candidate` 给的路径是不是可用的结果目录；有问题返回说明。"""
+    if os.path.isfile(path):
+        if path.lower().endswith(".json"):
+            return (
+                "这是个文件，看起来是**配置文件**；配置文件请用 --config 传入，"
+                "--baseline/--candidate 要的是「结果目录」的路径。"
+            )
+        return "这是个文件，不是目录 —— --baseline/--candidate 要的是「结果目录」的路径。"
+    if not os.path.exists(path):
+        return "路径不存在，请检查拼写或挂载。"
+    if not os.path.isdir(path):
+        return "不是目录，请检查。"
+    return None
 
 
 def _覆盖(result_dir, name, kernel):
