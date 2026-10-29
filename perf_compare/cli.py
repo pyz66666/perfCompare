@@ -44,11 +44,22 @@ def main(argv=None):
 def _build_parser():
     parser = argparse.ArgumentParser(
         prog="perf-compare",
-        description="把多次性能测试的结果目录横向比对，判定劣化并产出对比表格。",
+        description=(
+            "把多次性能测试的结果目录横向比对，判定劣化并产出对比表格与测试报告。\n"
+            "只给一个目录（不给 --candidate）时进入【整理模式】：只把结果格式化写成 Excel，"
+            "不做对比、不出报告。"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--config", help="配置文件路径（JSON）；与 --baseline/--candidate 二选一")
-    parser.add_argument("--baseline", help="基线结果目录；与 --config 二选一")
-    parser.add_argument("--candidate", help="对比结果目录；与 --config 二选一")
+    parser.add_argument(
+        "--baseline",
+        help="基线结果目录；与 --config 二选一。只给这一项 = 整理模式（不对比）",
+    )
+    parser.add_argument(
+        "--candidate",
+        help="对比结果目录；与 --config 二选一。**不给则进入整理模式**：只格式化，不对比、不出报告",
+    )
     parser.add_argument("--baseline-name", help="基线显示名（覆盖配置与自动推导）")
     parser.add_argument("--candidate-name", help="对比显示名（覆盖配置与自动推导）")
     parser.add_argument("--baseline-kernel", help="基线内核版本（覆盖配置与自动推导）")
@@ -56,10 +67,12 @@ def _build_parser():
     parser.add_argument(
         "--threshold", type=float, help="劣化阈值百分比（覆盖配置；纯目录传参时默认 5.0）"
     )
-    parser.add_argument("--excel", required=True, help="对比表格输出路径（.xlsx）")
+    parser.add_argument(
+        "--excel", required=True, help="表格输出路径（.xlsx）；整理模式下即整理表格"
+    )
     parser.add_argument(
         "--report",
-        help="测试报告输出前缀（可选）：写出 <前缀>.txt 与 <前缀>.html",
+        help="测试报告输出前缀（可选）：写出 <前缀>.txt 与 <前缀>.html；整理模式下会被忽略",
     )
     parser.add_argument(
         "--summarize-subitems",
